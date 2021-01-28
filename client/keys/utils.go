@@ -2,12 +2,15 @@ package keys
 
 import (
 	"fmt"
-	"io"
 	"path/filepath"
 
-	yaml "gopkg.in/yaml.v2"
+	"github.com/99designs/keyring"
+	"github.com/spf13/viper"
+	"github.com/tendermint/tendermint/libs/cli"
+	"gopkg.in/yaml.v2"
 
-	cryptokeyring "github.com/cosmos/cosmos-sdk/crypto/keyring"
+	"github.com/cosmos/cosmos-sdk/client/flags"
+	"github.com/cosmos/cosmos-sdk/crypto/keys"
 )
 
 // available output formats.
@@ -19,80 +22,101 @@ const (
 	defaultKeyDBName = "keys"
 )
 
-type bechKeyOutFn func(keyInfo cryptokeyring.Info) (cryptokeyring.KeyOutput, error)
+type bechKeyOutFn func(keyInfo keys.Info) (keys.KeyOutput, error)
 
-// NewLegacyKeyBaseFromDir initializes a legacy keybase at the rootDir directory. Keybase
+// NewKeyBaseFromDir initializes a keybase at the rootDir directory. Keybase
 // options can be applied when generating this new Keybase.
-func NewLegacyKeyBaseFromDir(rootDir string, opts ...cryptokeyring.KeybaseOption) (cryptokeyring.LegacyKeybase, error) {
-	return getLegacyKeyBaseFromDir(rootDir, opts...)
+func NewKeyBaseFromDir(rootDir string, opts ...keys.KeybaseOption) (keys.Keybase, error) {
+	return getLazyKeyBaseFromDir(rootDir, opts...)
 }
 
-func getLegacyKeyBaseFromDir(rootDir string, opts ...cryptokeyring.KeybaseOption) (cryptokeyring.LegacyKeybase, error) {
-	return cryptokeyring.NewLegacy(defaultKeyDBName, filepath.Join(rootDir, "keys"), opts...)
+// NewInMemoryKeyBase returns a storage-less keybase.
+func NewInMemoryKeyBase() keys.Keybase { return keys.NewInMemory() }
+
+func getLazyKeyBaseFromDir(rootDir string, opts ...keys.KeybaseOption) (keys.Keybase, error) {
+	return keys.New(defaultKeyDBName, filepath.Join(rootDir, "keys"), opts...), nil
 }
 
-func printKeyInfo(w io.Writer, keyInfo cryptokeyring.Info, bechKeyOut bechKeyOutFn, output string) {
+func printKeyInfo(keyInfo keys.Info, bechKeyOut bechKeyOutFn) {
 	ko, err := bechKeyOut(keyInfo)
 	if err != nil {
 		panic(err)
 	}
 
-	switch output {
+	switch viper.Get(cli.OutputFlag) {
 	case OutputFormatText:
-		printTextInfos(w, []cryptokeyring.KeyOutput{ko})
+		printTextInfos([]keys.KeyOutput{ko})
 
 	case OutputFormatJSON:
-		out, err := KeysCdc.MarshalJSON(ko)
+		var out []byte
+		var err error
+		if viper.GetBool(flags.FlagIndentResponse) {
+			out, err = KeysCdc.MarshalJSONIndent(ko, "", "  ")
+		} else {
+			out, err = KeysCdc.MarshalJSON(ko)
+		}
 		if err != nil {
 			panic(err)
 		}
 
-		fmt.Fprintln(w, string(out))
+		fmt.Println(string(out))
 	}
 }
 
-func printInfos(w io.Writer, infos []cryptokeyring.Info, output string) {
-	kos, err := cryptokeyring.Bech32KeysOutput(infos)
+func printInfos(infos []keys.Info) {
+	kos, err := keys.Bech32KeysOutput(infos)
 	if err != nil {
 		panic(err)
 	}
 
-	switch output {
+	switch viper.Get(cli.OutputFlag) {
 	case OutputFormatText:
-		printTextInfos(w, kos)
+		printTextInfos(kos)
 
 	case OutputFormatJSON:
-		out, err := KeysCdc.MarshalJSON(kos)
+		var out []byte
+		var err error
+
+		if viper.GetBool(flags.FlagIndentResponse) {
+			out, err = KeysCdc.MarshalJSONIndent(kos, "", "  ")
+		} else {
+			out, err = KeysCdc.MarshalJSON(kos)
+		}
+
 		if err != nil {
 			panic(err)
 		}
-
-		fmt.Fprintf(w, "%s", out)
+		fmt.Printf("%s", out)
 	}
 }
 
-func printTextInfos(w io.Writer, kos []cryptokeyring.KeyOutput) {
+func printTextInfos(kos []keys.KeyOutput) {
 	out, err := yaml.Marshal(&kos)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Fprintln(w, string(out))
+	fmt.Println(string(out))
 }
 
-func printKeyAddress(w io.Writer, info cryptokeyring.Info, bechKeyOut bechKeyOutFn) {
+func printKeyAddress(info keys.Info, bechKeyOut bechKeyOutFn) {
 	ko, err := bechKeyOut(info)
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Fprintln(w, ko.Address)
+	fmt.Println(ko.Address)
 }
 
-func printPubKey(w io.Writer, info cryptokeyring.Info, bechKeyOut bechKeyOutFn) {
+func printPubKey(info keys.Info, bechKeyOut bechKeyOutFn) {
 	ko, err := bechKeyOut(info)
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Fprintln(w, ko.PubKey)
+	fmt.Println(ko.PubKey)
+}
+
+func isRunningUnattended() bool {
+	backends := keyring.AvailableBackends()
+	return len(backends) == 2 && backends[1] == keyring.BackendType("file")
 }

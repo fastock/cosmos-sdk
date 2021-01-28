@@ -8,14 +8,14 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	paramtypes "github.com/cosmos/cosmos-sdk/x/params/types"
+	"github.com/cosmos/cosmos-sdk/x/params"
 	"github.com/cosmos/cosmos-sdk/x/staking/types"
 )
 
 const aminoCacheSize = 500
 
 // Implements ValidatorSet interface
-var _ types.ValidatorSet = Keeper{}
+//var _ types.ValidatorSet = Keeper{}
 
 // Implements DelegationSet interface
 var _ types.DelegationSet = Keeper{}
@@ -23,40 +23,33 @@ var _ types.DelegationSet = Keeper{}
 // keeper of the staking store
 type Keeper struct {
 	storeKey           sdk.StoreKey
-	cdc                codec.BinaryMarshaler
-	authKeeper         types.AccountKeeper
-	bankKeeper         types.BankKeeper
+	cdc                *codec.Codec
+	supplyKeeper       types.SupplyKeeper
 	hooks              types.StakingHooks
-	paramstore         paramtypes.Subspace
+	paramstore         params.Subspace
 	validatorCache     map[string]cachedValidator
 	validatorCacheList *list.List
 }
 
 // NewKeeper creates a new staking Keeper instance
 func NewKeeper(
-	cdc codec.BinaryMarshaler, key sdk.StoreKey, ak types.AccountKeeper, bk types.BankKeeper,
-	ps paramtypes.Subspace,
+	cdc *codec.Codec, key sdk.StoreKey, supplyKeeper types.SupplyKeeper, paramstore params.Subspace,
 ) Keeper {
-	// set KeyTable if it has not already been set
-	if !ps.HasKeyTable() {
-		ps = ps.WithKeyTable(types.ParamKeyTable())
-	}
 
 	// ensure bonded and not bonded module accounts are set
-	if addr := ak.GetModuleAddress(types.BondedPoolName); addr == nil {
+	if addr := supplyKeeper.GetModuleAddress(types.BondedPoolName); addr == nil {
 		panic(fmt.Sprintf("%s module account has not been set", types.BondedPoolName))
 	}
 
-	if addr := ak.GetModuleAddress(types.NotBondedPoolName); addr == nil {
+	if addr := supplyKeeper.GetModuleAddress(types.NotBondedPoolName); addr == nil {
 		panic(fmt.Sprintf("%s module account has not been set", types.NotBondedPoolName))
 	}
 
 	return Keeper{
 		storeKey:           key,
 		cdc:                cdc,
-		authKeeper:         ak,
-		bankKeeper:         bk,
-		paramstore:         ps,
+		supplyKeeper:       supplyKeeper,
+		paramstore:         paramstore.WithKeyTable(ParamKeyTable()),
 		hooks:              nil,
 		validatorCache:     make(map[string]cachedValidator, aminoCacheSize),
 		validatorCacheList: list.New(),
@@ -65,7 +58,7 @@ func NewKeeper(
 
 // Logger returns a module-specific logger.
 func (k Keeper) Logger(ctx sdk.Context) log.Logger {
-	return ctx.Logger().With("module", "x/"+types.ModuleName)
+	return ctx.Logger().With("module", fmt.Sprintf("x/%s", types.ModuleName))
 }
 
 // Set the validator hooks
@@ -73,30 +66,24 @@ func (k *Keeper) SetHooks(sh types.StakingHooks) *Keeper {
 	if k.hooks != nil {
 		panic("cannot set validator hooks twice")
 	}
-
 	k.hooks = sh
-
 	return k
 }
 
 // Load the last total validator power.
-func (k Keeper) GetLastTotalPower(ctx sdk.Context) sdk.Int {
+func (k Keeper) GetLastTotalPower(ctx sdk.Context) (power sdk.Int) {
 	store := ctx.KVStore(k.storeKey)
-	bz := store.Get(types.LastTotalPowerKey)
-
-	if bz == nil {
+	b := store.Get(types.LastTotalPowerKey)
+	if b == nil {
 		return sdk.ZeroInt()
 	}
-
-	ip := sdk.IntProto{}
-	k.cdc.MustUnmarshalBinaryBare(bz, &ip)
-
-	return ip.Int
+	k.cdc.MustUnmarshalBinaryLengthPrefixed(b, &power)
+	return
 }
 
 // Set the last total validator power.
 func (k Keeper) SetLastTotalPower(ctx sdk.Context, power sdk.Int) {
 	store := ctx.KVStore(k.storeKey)
-	bz := k.cdc.MustMarshalBinaryBare(&sdk.IntProto{Int: power})
-	store.Set(types.LastTotalPowerKey, bz)
+	b := k.cdc.MustMarshalBinaryLengthPrefixed(power)
+	store.Set(types.LastTotalPowerKey, b)
 }

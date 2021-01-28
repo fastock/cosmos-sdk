@@ -77,10 +77,10 @@ type ModuleAccount struct {
 The `auth` codec definition:
 
 ```go
-var ModuleCdc *codec.LegacyAmino
+var ModuleCdc *codec.Codec
 
 func init() {
-    ModuleCdc = codec.NewLegacyAmino()
+    ModuleCdc = codec.New()
     // register module msg's and Account interface
     ...
     // leave the codec unsealed

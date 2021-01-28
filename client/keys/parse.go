@@ -9,11 +9,14 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/tendermint/tendermint/libs/cli"
+	"github.com/spf13/viper"
 	yaml "gopkg.in/yaml.v2"
 
+	"github.com/tendermint/tendermint/libs/bech32"
+	"github.com/tendermint/tendermint/libs/cli"
+
+	"github.com/cosmos/cosmos-sdk/client/flags"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/cosmos/cosmos-sdk/types/bech32"
 )
 
 func bech32Prefixes(config *sdk.Config) []string {
@@ -81,12 +84,14 @@ hexadecimal into bech32 cosmos prefixed format and vice versa.
 		Args: cobra.ExactArgs(1),
 		RunE: parseKey,
 	}
+	cmd.Flags().Bool(flags.FlagIndentResponse, false, "Indent JSON output")
 
 	return cmd
 }
 
 func parseKey(cmd *cobra.Command, args []string) error {
 	config, _ := sdk.GetSealedConfig(context.Background())
+
 	return doParseKey(cmd, config, args)
 }
 
@@ -98,8 +103,7 @@ func doParseKey(cmd *cobra.Command, config *sdk.Config, args []string) error {
 		return errors.New("couldn't parse empty input")
 	}
 
-	output, _ := cmd.Flags().GetString(cli.OutputFlag)
-	if !(runFromBech32(outstream, addr, output) || runFromHex(config, outstream, addr, output)) {
+	if !(runFromBech32(outstream, addr) || runFromHex(config, outstream, addr)) {
 		return errors.New("couldn't find valid bech32 nor hex data")
 	}
 
@@ -107,41 +111,45 @@ func doParseKey(cmd *cobra.Command, config *sdk.Config, args []string) error {
 }
 
 // print info from bech32
-func runFromBech32(w io.Writer, bech32str, output string) bool {
+func runFromBech32(w io.Writer, bech32str string) bool {
 	hrp, bz, err := bech32.DecodeAndConvert(bech32str)
 	if err != nil {
 		return false
 	}
 
-	displayParseKeyInfo(w, newHexOutput(hrp, bz), output)
+	displayParseKeyInfo(w, newHexOutput(hrp, bz))
 
 	return true
 }
 
 // print info from hex
-func runFromHex(config *sdk.Config, w io.Writer, hexstr, output string) bool {
+func runFromHex(config *sdk.Config, w io.Writer, hexstr string) bool {
 	bz, err := hex.DecodeString(hexstr)
 	if err != nil {
 		return false
 	}
 
-	displayParseKeyInfo(w, newBech32Output(config, bz), output)
+	displayParseKeyInfo(w, newBech32Output(config, bz))
 
 	return true
 }
 
-func displayParseKeyInfo(w io.Writer, stringer fmt.Stringer, output string) {
-	var (
-		err error
-		out []byte
-	)
+func displayParseKeyInfo(w io.Writer, stringer fmt.Stringer) {
+	var out []byte
+	var err error
 
-	switch output {
+	switch viper.Get(cli.OutputFlag) {
 	case OutputFormatText:
 		out, err = yaml.Marshal(&stringer)
 
 	case OutputFormatJSON:
-		out, err = KeysCdc.MarshalJSON(stringer)
+
+		if viper.GetBool(flags.FlagIndentResponse) {
+			out, err = KeysCdc.MarshalJSONIndent(stringer, "", "  ")
+		} else {
+			out = KeysCdc.MustMarshalJSON(stringer)
+		}
+
 	}
 
 	if err != nil {

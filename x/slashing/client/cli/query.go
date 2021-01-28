@@ -1,20 +1,22 @@
 package cli
 
 import (
-	"context"
+	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/cosmos/cosmos-sdk/client"
+	"github.com/cosmos/cosmos-sdk/client/context"
 	"github.com/cosmos/cosmos-sdk/client/flags"
+	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"github.com/cosmos/cosmos-sdk/x/slashing/types"
+	"github.com/cosmos/cosmos-sdk/x/slashing/internal/types"
 )
 
 // GetQueryCmd returns the cli query commands for this module
-func GetQueryCmd() *cobra.Command {
+func GetQueryCmd(queryRoute string, cdc *codec.Codec) *cobra.Command {
 	// Group slashing queries under a subcommand
 	slashingQueryCmd := &cobra.Command{
 		Use:                        types.ModuleName,
@@ -25,9 +27,10 @@ func GetQueryCmd() *cobra.Command {
 	}
 
 	slashingQueryCmd.AddCommand(
-		GetCmdQuerySigningInfo(),
-		GetCmdQueryParams(),
-		GetCmdQuerySigningInfos(),
+		flags.GetCommands(
+			GetCmdQuerySigningInfo(queryRoute, cdc),
+			GetCmdQueryParams(cdc),
+		)...,
 	)
 
 	return slashingQueryCmd
@@ -35,21 +38,17 @@ func GetQueryCmd() *cobra.Command {
 }
 
 // GetCmdQuerySigningInfo implements the command to query signing info.
-func GetCmdQuerySigningInfo() *cobra.Command {
-	cmd := &cobra.Command{
+func GetCmdQuerySigningInfo(storeName string, cdc *codec.Codec) *cobra.Command {
+	return &cobra.Command{
 		Use:   "signing-info [validator-conspub]",
 		Short: "Query a validator's signing information",
 		Long: strings.TrimSpace(`Use a validators' consensus public key to find the signing-info for that validator:
 
-$ <appd> query slashing signing-info cosmosvalconspub1zcjduepqfhvwcmt7p06fvdgexxhmz0l8c7sgswl7ulv7aulk364x4g5xsw7sr0k2g5
+$ <appcli> query slashing signing-info cosmosvalconspub1zcjduepqfhvwcmt7p06fvdgexxhmz0l8c7sgswl7ulv7aulk364x4g5xsw7sr0k2g5
 `),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clientCtx, err := client.GetClientQueryContext(cmd)
-			if err != nil {
-				return err
-			}
-			queryClient := types.NewQueryClient(clientCtx)
+			cliCtx := context.NewCLIContext().WithCodec(cdc)
 
 			pk, err := sdk.GetPubKeyFromBech32(sdk.Bech32PubKeyTypeConsPub, args[0])
 			if err != nil {
@@ -57,87 +56,46 @@ $ <appd> query slashing signing-info cosmosvalconspub1zcjduepqfhvwcmt7p06fvdgexx
 			}
 
 			consAddr := sdk.ConsAddress(pk.Address())
-			params := &types.QuerySigningInfoRequest{ConsAddress: consAddr.String()}
-			res, err := queryClient.SigningInfo(context.Background(), params)
+			key := types.GetValidatorSigningInfoKey(consAddr)
+
+			res, _, err := cliCtx.QueryStore(key, storeName)
 			if err != nil {
 				return err
 			}
 
-			return clientCtx.PrintProto(&res.ValSigningInfo)
+			if len(res) == 0 {
+				return fmt.Errorf("validator %s not found in slashing store", consAddr)
+			}
+
+			var signingInfo types.ValidatorSigningInfo
+			cdc.MustUnmarshalBinaryLengthPrefixed(res, &signingInfo)
+			return cliCtx.PrintOutput(signingInfo)
 		},
 	}
-
-	flags.AddQueryFlagsToCmd(cmd)
-
-	return cmd
-}
-
-// GetCmdQuerySigningInfos implements the command to query signing infos.
-func GetCmdQuerySigningInfos() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "signing-infos",
-		Short: "Query signing information of all validators",
-		Long: strings.TrimSpace(`signing infos of validators:
-
-$ <appd> query slashing signing-infos
-`),
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			clientCtx, err := client.GetClientQueryContext(cmd)
-			if err != nil {
-				return err
-			}
-			queryClient := types.NewQueryClient(clientCtx)
-
-			pageReq, err := client.ReadPageRequest(cmd.Flags())
-			if err != nil {
-				return err
-			}
-
-			params := &types.QuerySigningInfosRequest{Pagination: pageReq}
-			res, err := queryClient.SigningInfos(context.Background(), params)
-			if err != nil {
-				return err
-			}
-
-			return clientCtx.PrintProto(res)
-		},
-	}
-
-	flags.AddQueryFlagsToCmd(cmd)
-	flags.AddPaginationFlagsToCmd(cmd, "signing infos")
-
-	return cmd
 }
 
 // GetCmdQueryParams implements a command to fetch slashing parameters.
-func GetCmdQueryParams() *cobra.Command {
-	cmd := &cobra.Command{
+func GetCmdQueryParams(cdc *codec.Codec) *cobra.Command {
+	return &cobra.Command{
 		Use:   "params",
 		Short: "Query the current slashing parameters",
 		Args:  cobra.NoArgs,
 		Long: strings.TrimSpace(`Query genesis parameters for the slashing module:
 
-$ <appd> query slashing params
+$ <appcli> query slashing params
 `),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clientCtx, err := client.GetClientQueryContext(cmd)
-			if err != nil {
-				return err
-			}
-			queryClient := types.NewQueryClient(clientCtx)
+			cliCtx := context.NewCLIContext().WithCodec(cdc)
 
-			params := &types.QueryParamsRequest{}
-			res, err := queryClient.Params(context.Background(), params)
+			route := fmt.Sprintf("custom/%s/parameters", types.QuerierRoute)
+			res, _, err := cliCtx.QueryWithData(route, nil)
 			if err != nil {
 				return err
 			}
 
-			return clientCtx.PrintProto(&res.Params)
+			var params types.Params
+			cdc.MustUnmarshalJSON(res, &params)
+			return cliCtx.PrintOutput(params)
 		},
 	}
-
-	flags.AddQueryFlagsToCmd(cmd)
-
-	return cmd
 }

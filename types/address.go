@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/tendermint/tendermint/crypto"
+	tmamino "github.com/tendermint/tendermint/crypto/encoding/amino"
 	yaml "gopkg.in/yaml.v2"
 
-	"github.com/cosmos/cosmos-sdk/codec/legacy"
-	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
-	"github.com/cosmos/cosmos-sdk/types/bech32"
+	"github.com/tendermint/tendermint/libs/bech32"
 )
 
 const (
@@ -98,8 +98,16 @@ type AccAddress []byte
 
 // AccAddressFromHex creates an AccAddress from a hex string.
 func AccAddressFromHex(address string) (addr AccAddress, err error) {
-	bz, err := addressBytesFromHexString(address)
-	return AccAddress(bz), err
+	if len(address) == 0 {
+		return addr, errors.New("decoding Bech32 address failed: must provide an address")
+	}
+
+	bz, err := hex.DecodeString(address)
+	if err != nil {
+		return nil, err
+	}
+
+	return AccAddress(bz), nil
 }
 
 // VerifyAddressFormat verifies that the provided bytes form a valid address
@@ -111,7 +119,7 @@ func VerifyAddressFormat(bz []byte) error {
 		return verifier(bz)
 	}
 	if len(bz) != AddrLen {
-		return fmt.Errorf("incorrect address length (expected: %d, actual: %d)", AddrLen, len(bz))
+		return errors.New("incorrect address length")
 	}
 	return nil
 }
@@ -119,7 +127,7 @@ func VerifyAddressFormat(bz []byte) error {
 // AccAddressFromBech32 creates an AccAddress from a Bech32 string.
 func AccAddressFromBech32(address string) (addr AccAddress, err error) {
 	if len(strings.TrimSpace(address)) == 0 {
-		return AccAddress{}, errors.New("empty address string is not allowed")
+		return AccAddress{}, nil
 	}
 
 	bech32PrefixAccAddr := GetConfig().GetBech32AccountAddrPrefix()
@@ -183,13 +191,8 @@ func (aa AccAddress) MarshalYAML() (interface{}, error) {
 func (aa *AccAddress) UnmarshalJSON(data []byte) error {
 	var s string
 	err := json.Unmarshal(data, &s)
-
 	if err != nil {
 		return err
-	}
-	if s == "" {
-		*aa = AccAddress{}
-		return nil
 	}
 
 	aa2, err := AccAddressFromBech32(s)
@@ -207,10 +210,6 @@ func (aa *AccAddress) UnmarshalYAML(data []byte) error {
 	err := yaml.Unmarshal(data, &s)
 	if err != nil {
 		return err
-	}
-	if s == "" {
-		*aa = AccAddress{}
-		return nil
 	}
 
 	aa2, err := AccAddressFromBech32(s)
@@ -266,14 +265,22 @@ type ValAddress []byte
 
 // ValAddressFromHex creates a ValAddress from a hex string.
 func ValAddressFromHex(address string) (addr ValAddress, err error) {
-	bz, err := addressBytesFromHexString(address)
-	return ValAddress(bz), err
+	if len(address) == 0 {
+		return addr, errors.New("decoding Bech32 address failed: must provide an address")
+	}
+
+	bz, err := hex.DecodeString(address)
+	if err != nil {
+		return nil, err
+	}
+
+	return ValAddress(bz), nil
 }
 
 // ValAddressFromBech32 creates a ValAddress from a Bech32 string.
 func ValAddressFromBech32(address string) (addr ValAddress, err error) {
 	if len(strings.TrimSpace(address)) == 0 {
-		return ValAddress{}, errors.New("empty address string is not allowed")
+		return ValAddress{}, nil
 	}
 
 	bech32PrefixValAddr := GetConfig().GetBech32ValidatorAddrPrefix()
@@ -341,10 +348,6 @@ func (va *ValAddress) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if s == "" {
-		*va = ValAddress{}
-		return nil
-	}
 
 	va2, err := ValAddressFromBech32(s)
 	if err != nil {
@@ -362,10 +365,6 @@ func (va *ValAddress) UnmarshalYAML(data []byte) error {
 	err := yaml.Unmarshal(data, &s)
 	if err != nil {
 		return err
-	}
-	if s == "" {
-		*va = ValAddress{}
-		return nil
 	}
 
 	va2, err := ValAddressFromBech32(s)
@@ -421,14 +420,22 @@ type ConsAddress []byte
 
 // ConsAddressFromHex creates a ConsAddress from a hex string.
 func ConsAddressFromHex(address string) (addr ConsAddress, err error) {
-	bz, err := addressBytesFromHexString(address)
-	return ConsAddress(bz), err
+	if len(address) == 0 {
+		return addr, errors.New("decoding Bech32 address failed: must provide an address")
+	}
+
+	bz, err := hex.DecodeString(address)
+	if err != nil {
+		return nil, err
+	}
+
+	return ConsAddress(bz), nil
 }
 
 // ConsAddressFromBech32 creates a ConsAddress from a Bech32 string.
 func ConsAddressFromBech32(address string) (addr ConsAddress, err error) {
 	if len(strings.TrimSpace(address)) == 0 {
-		return ConsAddress{}, errors.New("empty address string is not allowed")
+		return ConsAddress{}, nil
 	}
 
 	bech32PrefixConsAddr := GetConfig().GetBech32ConsensusAddrPrefix()
@@ -447,7 +454,7 @@ func ConsAddressFromBech32(address string) (addr ConsAddress, err error) {
 }
 
 // get ConsAddress from pubkey
-func GetConsAddress(pubkey cryptotypes.PubKey) ConsAddress {
+func GetConsAddress(pubkey crypto.PubKey) ConsAddress {
 	return ConsAddress(pubkey.Address())
 }
 
@@ -501,10 +508,6 @@ func (ca *ConsAddress) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if s == "" {
-		*ca = ConsAddress{}
-		return nil
-	}
 
 	ca2, err := ConsAddressFromBech32(s)
 	if err != nil {
@@ -522,10 +525,6 @@ func (ca *ConsAddress) UnmarshalYAML(data []byte) error {
 	err := yaml.Unmarshal(data, &s)
 	if err != nil {
 		return err
-	}
-	if s == "" {
-		*ca = ConsAddress{}
-		return nil
 	}
 
 	ca2, err := ConsAddressFromBech32(s)
@@ -558,30 +557,6 @@ func (ca ConsAddress) String() string {
 	return bech32Addr
 }
 
-// Bech32ifyAddressBytes returns a bech32 representation of address bytes.
-// Returns an empty sting if the byte slice is 0-length. Returns an error if the bech32 conversion
-// fails or the prefix is empty.
-func Bech32ifyAddressBytes(prefix string, bs []byte) (string, error) {
-	if len(bs) == 0 {
-		return "", nil
-	}
-	if len(prefix) == 0 {
-		return "", errors.New("prefix cannot be empty")
-	}
-	return bech32.ConvertAndEncode(prefix, bs)
-}
-
-// MustBech32ifyAddressBytes returns a bech32 representation of address bytes.
-// Returns an empty sting if the byte slice is 0-length. It panics if the bech32 conversion
-// fails or the prefix is empty.
-func MustBech32ifyAddressBytes(prefix string, bs []byte) string {
-	s, err := Bech32ifyAddressBytes(prefix, bs)
-	if err != nil {
-		panic(err)
-	}
-	return s
-}
-
 // Format implements the fmt.Formatter interface.
 // nolint: errcheck
 func (ca ConsAddress) Format(s fmt.State, verb rune) {
@@ -611,8 +586,7 @@ const (
 
 // Bech32ifyPubKey returns a Bech32 encoded string containing the appropriate
 // prefix based on the key type provided for a given PublicKey.
-// TODO: Remove Bech32ifyPubKey and all usages (cosmos/cosmos-sdk/issues/#7357)
-func Bech32ifyPubKey(pkt Bech32PubKeyType, pubkey cryptotypes.PubKey) (string, error) {
+func Bech32ifyPubKey(pkt Bech32PubKeyType, pubkey crypto.PubKey) (string, error) {
 	var bech32Prefix string
 
 	switch pkt {
@@ -627,11 +601,11 @@ func Bech32ifyPubKey(pkt Bech32PubKeyType, pubkey cryptotypes.PubKey) (string, e
 
 	}
 
-	return bech32.ConvertAndEncode(bech32Prefix, legacy.Cdc.MustMarshalBinaryBare(pubkey))
+	return bech32.ConvertAndEncode(bech32Prefix, pubkey.Bytes())
 }
 
 // MustBech32ifyPubKey calls Bech32ifyPubKey except it panics on error.
-func MustBech32ifyPubKey(pkt Bech32PubKeyType, pubkey cryptotypes.PubKey) string {
+func MustBech32ifyPubKey(pkt Bech32PubKeyType, pubkey crypto.PubKey) string {
 	res, err := Bech32ifyPubKey(pkt, pubkey)
 	if err != nil {
 		panic(err)
@@ -642,7 +616,7 @@ func MustBech32ifyPubKey(pkt Bech32PubKeyType, pubkey cryptotypes.PubKey) string
 
 // GetPubKeyFromBech32 returns a PublicKey from a bech32-encoded PublicKey with
 // a given key type.
-func GetPubKeyFromBech32(pkt Bech32PubKeyType, pubkeyStr string) (cryptotypes.PubKey, error) {
+func GetPubKeyFromBech32(pkt Bech32PubKeyType, pubkeyStr string) (crypto.PubKey, error) {
 	var bech32Prefix string
 
 	switch pkt {
@@ -662,11 +636,16 @@ func GetPubKeyFromBech32(pkt Bech32PubKeyType, pubkeyStr string) (cryptotypes.Pu
 		return nil, err
 	}
 
-	return legacy.PubKeyFromBytes(bz)
+	pk, err := tmamino.PubKeyFromBytes(bz)
+	if err != nil {
+		return nil, err
+	}
+
+	return pk, nil
 }
 
 // MustGetPubKeyFromBech32 calls GetPubKeyFromBech32 except it panics on error.
-func MustGetPubKeyFromBech32(pkt Bech32PubKeyType, pubkeyStr string) cryptotypes.PubKey {
+func MustGetPubKeyFromBech32(pkt Bech32PubKeyType, pubkeyStr string) crypto.PubKey {
 	res, err := GetPubKeyFromBech32(pkt, pubkeyStr)
 	if err != nil {
 		panic(err)
@@ -691,12 +670,4 @@ func GetFromBech32(bech32str, prefix string) ([]byte, error) {
 	}
 
 	return bz, nil
-}
-
-func addressBytesFromHexString(address string) ([]byte, error) {
-	if len(address) == 0 {
-		return nil, errors.New("decoding Bech32 address failed: must provide an address")
-	}
-
-	return hex.DecodeString(address)
 }

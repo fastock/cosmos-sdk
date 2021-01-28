@@ -4,65 +4,58 @@ import (
 	"encoding/json"
 	"log"
 
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+	abci "github.com/tendermint/tendermint/abci/types"
+	tmtypes "github.com/tendermint/tendermint/types"
 
-	servertypes "github.com/cosmos/cosmos-sdk/server/types"
+	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	slashingtypes "github.com/cosmos/cosmos-sdk/x/slashing/types"
+	"github.com/cosmos/cosmos-sdk/x/slashing"
 	"github.com/cosmos/cosmos-sdk/x/staking"
-	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
+	"github.com/cosmos/cosmos-sdk/x/staking/exported"
 )
 
 // ExportAppStateAndValidators exports the state of the application for a genesis
 // file.
 func (app *SimApp) ExportAppStateAndValidators(
-	forZeroHeight bool, jailAllowedAddrs []string,
-) (servertypes.ExportedApp, error) {
+	forZeroHeight bool, jailWhiteList []string,
+) (appState json.RawMessage, validators []tmtypes.GenesisValidator, err error) {
+
 	// as if they could withdraw from the start of the next block
-	ctx := app.NewContext(true, tmproto.Header{Height: app.LastBlockHeight()})
+	ctx := app.NewContext(true, abci.Header{Height: app.LastBlockHeight()})
 
-	// We export at last height + 1, because that's the height at which
-	// Tendermint will start InitChain.
-	height := app.LastBlockHeight() + 1
 	if forZeroHeight {
-		height = 0
-		app.prepForZeroHeightGenesis(ctx, jailAllowedAddrs)
+		app.prepForZeroHeightGenesis(ctx, jailWhiteList)
 	}
 
-	genState := app.mm.ExportGenesis(ctx, app.appCodec)
-	appState, err := json.MarshalIndent(genState, "", "  ")
+	genState := app.mm.ExportGenesis(ctx)
+	appState, err = codec.MarshalJSONIndent(app.cdc, genState)
 	if err != nil {
-		return servertypes.ExportedApp{}, err
+		return nil, nil, err
 	}
 
-	validators, err := staking.WriteValidators(ctx, app.StakingKeeper)
-	return servertypes.ExportedApp{
-		AppState:        appState,
-		Validators:      validators,
-		Height:          height,
-		ConsensusParams: app.BaseApp.GetConsensusParams(ctx),
-	}, err
+	validators = staking.WriteValidators(ctx, app.StakingKeeper)
+	return appState, validators, nil
 }
 
 // prepare for fresh start at zero height
 // NOTE zero height genesis is a temporary feature which will be deprecated
 //      in favour of export at a block height
-func (app *SimApp) prepForZeroHeightGenesis(ctx sdk.Context, jailAllowedAddrs []string) {
-	applyAllowedAddrs := false
+func (app *SimApp) prepForZeroHeightGenesis(ctx sdk.Context, jailWhiteList []string) {
+	applyWhiteList := false
 
-	// check if there is a allowed address list
-	if len(jailAllowedAddrs) > 0 {
-		applyAllowedAddrs = true
+	//Check if there is a whitelist
+	if len(jailWhiteList) > 0 {
+		applyWhiteList = true
 	}
 
-	allowedAddrsMap := make(map[string]bool)
+	whiteListMap := make(map[string]bool)
 
-	for _, addr := range jailAllowedAddrs {
+	for _, addr := range jailWhiteList {
 		_, err := sdk.ValAddressFromBech32(addr)
 		if err != nil {
 			log.Fatal(err)
 		}
-		allowedAddrsMap[addr] = true
+		whiteListMap[addr] = true
 	}
 
 	/* Just to be safe, assert the invariants on current state. */
@@ -71,7 +64,7 @@ func (app *SimApp) prepForZeroHeightGenesis(ctx sdk.Context, jailAllowedAddrs []
 	/* Handle fee distribution state. */
 
 	// withdraw all validator commission
-	app.StakingKeeper.IterateValidators(ctx, func(_ int64, val stakingtypes.ValidatorI) (stop bool) {
+	app.StakingKeeper.IterateValidators(ctx, func(_ int64, val exported.ValidatorI) (stop bool) {
 		_, _ = app.DistrKeeper.WithdrawValidatorCommission(ctx, val.GetOperator())
 		return false
 	})
@@ -79,16 +72,7 @@ func (app *SimApp) prepForZeroHeightGenesis(ctx sdk.Context, jailAllowedAddrs []
 	// withdraw all delegator rewards
 	dels := app.StakingKeeper.GetAllDelegations(ctx)
 	for _, delegation := range dels {
-		valAddr, err := sdk.ValAddressFromBech32(delegation.ValidatorAddress)
-		if err != nil {
-			panic(err)
-		}
-
-		delAddr, err := sdk.AccAddressFromBech32(delegation.DelegatorAddress)
-		if err != nil {
-			panic(err)
-		}
-		_, _ = app.DistrKeeper.WithdrawDelegationRewards(ctx, delAddr, valAddr)
+		_, _ = app.DistrKeeper.WithdrawDelegationRewards(ctx, delegation.DelegatorAddress, delegation.ValidatorAddress)
 	}
 
 	// clear validator slash events
@@ -102,9 +86,10 @@ func (app *SimApp) prepForZeroHeightGenesis(ctx sdk.Context, jailAllowedAddrs []
 	ctx = ctx.WithBlockHeight(0)
 
 	// reinitialize all validators
-	app.StakingKeeper.IterateValidators(ctx, func(_ int64, val stakingtypes.ValidatorI) (stop bool) {
+	app.StakingKeeper.IterateValidators(ctx, func(_ int64, val exported.ValidatorI) (stop bool) {
+
 		// donate any unwithdrawn outstanding reward fraction tokens to the community pool
-		scraps := app.DistrKeeper.GetValidatorOutstandingRewardsCoins(ctx, val.GetOperator())
+		scraps := app.DistrKeeper.GetValidatorOutstandingRewards(ctx, val.GetOperator())
 		feePool := app.DistrKeeper.GetFeePool(ctx)
 		feePool.CommunityPool = feePool.CommunityPool.Add(scraps...)
 		app.DistrKeeper.SetFeePool(ctx, feePool)
@@ -115,16 +100,8 @@ func (app *SimApp) prepForZeroHeightGenesis(ctx sdk.Context, jailAllowedAddrs []
 
 	// reinitialize all delegations
 	for _, del := range dels {
-		valAddr, err := sdk.ValAddressFromBech32(del.ValidatorAddress)
-		if err != nil {
-			panic(err)
-		}
-		delAddr, err := sdk.AccAddressFromBech32(del.DelegatorAddress)
-		if err != nil {
-			panic(err)
-		}
-		app.DistrKeeper.Hooks().BeforeDelegationCreated(ctx, delAddr, valAddr)
-		app.DistrKeeper.Hooks().AfterDelegationModified(ctx, delAddr, valAddr)
+		app.DistrKeeper.Hooks().BeforeDelegationCreated(ctx, del.DelegatorAddress, del.ValidatorAddress)
+		app.DistrKeeper.Hooks().AfterDelegationModified(ctx, del.DelegatorAddress, del.ValidatorAddress)
 	}
 
 	// reset context height
@@ -133,7 +110,7 @@ func (app *SimApp) prepForZeroHeightGenesis(ctx sdk.Context, jailAllowedAddrs []
 	/* Handle staking state. */
 
 	// iterate through redelegations, reset creation height
-	app.StakingKeeper.IterateRedelegations(ctx, func(_ int64, red stakingtypes.Redelegation) (stop bool) {
+	app.StakingKeeper.IterateRedelegations(ctx, func(_ int64, red staking.Redelegation) (stop bool) {
 		for i := range red.Entries {
 			red.Entries[i].CreationHeight = 0
 		}
@@ -142,7 +119,7 @@ func (app *SimApp) prepForZeroHeightGenesis(ctx sdk.Context, jailAllowedAddrs []
 	})
 
 	// iterate through unbonding delegations, reset creation height
-	app.StakingKeeper.IterateUnbondingDelegations(ctx, func(_ int64, ubd stakingtypes.UnbondingDelegation) (stop bool) {
+	app.StakingKeeper.IterateUnbondingDelegations(ctx, func(_ int64, ubd staking.UnbondingDelegation) (stop bool) {
 		for i := range ubd.Entries {
 			ubd.Entries[i].CreationHeight = 0
 		}
@@ -152,8 +129,8 @@ func (app *SimApp) prepForZeroHeightGenesis(ctx sdk.Context, jailAllowedAddrs []
 
 	// Iterate through validators by power descending, reset bond heights, and
 	// update bond intra-tx counters.
-	store := ctx.KVStore(app.keys[stakingtypes.StoreKey])
-	iter := sdk.KVStoreReversePrefixIterator(store, stakingtypes.ValidatorsKey)
+	store := ctx.KVStore(app.keys[staking.StoreKey])
+	iter := sdk.KVStoreReversePrefixIterator(store, staking.ValidatorsKey)
 	counter := int16(0)
 
 	for ; iter.Valid(); iter.Next() {
@@ -164,7 +141,7 @@ func (app *SimApp) prepForZeroHeightGenesis(ctx sdk.Context, jailAllowedAddrs []
 		}
 
 		validator.UnbondingHeight = 0
-		if applyAllowedAddrs && !allowedAddrsMap[addr.String()] {
+		if applyWhiteList && !whiteListMap[addr.String()] {
 			validator.Jailed = true
 		}
 
@@ -174,17 +151,14 @@ func (app *SimApp) prepForZeroHeightGenesis(ctx sdk.Context, jailAllowedAddrs []
 
 	iter.Close()
 
-	_, err := app.StakingKeeper.ApplyAndReturnValidatorSetUpdates(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
+	_ = app.StakingKeeper.ApplyAndReturnValidatorSetUpdates(ctx)
 
 	/* Handle slashing state. */
 
 	// reset start height on signing infos
 	app.SlashingKeeper.IterateValidatorSigningInfos(
 		ctx,
-		func(addr sdk.ConsAddress, info slashingtypes.ValidatorSigningInfo) (stop bool) {
+		func(addr sdk.ConsAddress, info slashing.ValidatorSigningInfo) (stop bool) {
 			info.StartHeight = 0
 			app.SlashingKeeper.SetValidatorSigningInfo(ctx, addr, info)
 			return false

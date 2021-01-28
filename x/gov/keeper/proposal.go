@@ -15,9 +15,9 @@ func (keeper Keeper) SubmitProposal(ctx sdk.Context, content types.Content) (typ
 		return types.Proposal{}, sdkerrors.Wrap(types.ErrNoProposalHandlerExists, content.ProposalRoute())
 	}
 
-	// Execute the proposal content in a new context branch (with branched store)
-	// to validate the actual parameter changes before the proposal proceeds
-	// through the governance process. State is not persisted.
+	// Execute the proposal content in a cache-wrapped context to validate the
+	// actual parameter changes before the proposal proceeds through the
+	// governance process. State is not persisted.
 	cacheCtx, _ := ctx.CacheContext()
 	handler := keeper.router.GetRoute(content.ProposalRoute())
 	if err := handler(cacheCtx, content); err != nil {
@@ -32,10 +32,7 @@ func (keeper Keeper) SubmitProposal(ctx sdk.Context, content types.Content) (typ
 	submitTime := ctx.BlockHeader().Time
 	depositPeriod := keeper.GetDepositParams(ctx).MaxDepositPeriod
 
-	proposal, err := types.NewProposal(content, proposalID, submitTime, submitTime.Add(depositPeriod))
-	if err != nil {
-		return types.Proposal{}, err
-	}
+	proposal := types.NewProposal(content, proposalID, submitTime, submitTime.Add(depositPeriod))
 
 	keeper.SetProposal(ctx, proposal)
 	keeper.InsertInactiveProposalQueue(ctx, proposalID, proposal.DepositEndTime)
@@ -52,27 +49,21 @@ func (keeper Keeper) SubmitProposal(ctx sdk.Context, content types.Content) (typ
 }
 
 // GetProposal get proposal from store by ProposalID
-func (keeper Keeper) GetProposal(ctx sdk.Context, proposalID uint64) (types.Proposal, bool) {
+func (keeper Keeper) GetProposal(ctx sdk.Context, proposalID uint64) (proposal types.Proposal, ok bool) {
 	store := ctx.KVStore(keeper.storeKey)
-
 	bz := store.Get(types.ProposalKey(proposalID))
 	if bz == nil {
-		return types.Proposal{}, false
+		return
 	}
-
-	var proposal types.Proposal
-	keeper.MustUnmarshalProposal(bz, &proposal)
-
+	keeper.cdc.MustUnmarshalBinaryLengthPrefixed(bz, &proposal)
 	return proposal, true
 }
 
 // SetProposal set a proposal to store
 func (keeper Keeper) SetProposal(ctx sdk.Context, proposal types.Proposal) {
 	store := ctx.KVStore(keeper.storeKey)
-
-	bz := keeper.MustMarshalProposal(proposal)
-
-	store.Set(types.ProposalKey(proposal.ProposalId), bz)
+	bz := keeper.cdc.MustMarshalBinaryLengthPrefixed(proposal)
+	store.Set(types.ProposalKey(proposal.ProposalID), bz)
 }
 
 // DeleteProposal deletes a proposal from store
@@ -90,16 +81,12 @@ func (keeper Keeper) DeleteProposal(ctx sdk.Context, proposalID uint64) {
 // IterateProposals iterates over the all the proposals and performs a callback function
 func (keeper Keeper) IterateProposals(ctx sdk.Context, cb func(proposal types.Proposal) (stop bool)) {
 	store := ctx.KVStore(keeper.storeKey)
-
 	iterator := sdk.KVStorePrefixIterator(store, types.ProposalsKeyPrefix)
-	defer iterator.Close()
 
+	defer iterator.Close()
 	for ; iterator.Valid(); iterator.Next() {
 		var proposal types.Proposal
-		err := keeper.UnmarshalProposal(iterator.Value(), &proposal)
-		if err != nil {
-			panic(err)
-		}
+		keeper.cdc.MustUnmarshalBinaryLengthPrefixed(iterator.Value(), &proposal)
 
 		if cb(proposal) {
 			break
@@ -125,7 +112,7 @@ func (keeper Keeper) GetProposals(ctx sdk.Context) (proposals types.Proposals) {
 //
 // NOTE: If no filters are provided, all proposals will be returned in paginated
 // form.
-func (keeper Keeper) GetProposalsFiltered(ctx sdk.Context, params types.QueryProposalsParams) types.Proposals {
+func (keeper Keeper) GetProposalsFiltered(ctx sdk.Context, params types.QueryProposalsParams) []types.Proposal {
 	proposals := keeper.GetProposals(ctx)
 	filteredProposals := make([]types.Proposal, 0, len(proposals))
 
@@ -139,12 +126,12 @@ func (keeper Keeper) GetProposalsFiltered(ctx sdk.Context, params types.QueryPro
 
 		// match voter address (if supplied)
 		if len(params.Voter) > 0 {
-			_, matchVoter = keeper.GetVote(ctx, p.ProposalId, params.Voter)
+			_, matchVoter = keeper.GetVote(ctx, p.ProposalID, params.Voter)
 		}
 
 		// match depositor (if supplied)
 		if len(params.Depositor) > 0 {
-			_, matchDepositor = keeper.GetDeposit(ctx, p.ProposalId, params.Depositor)
+			_, matchDepositor = keeper.GetDeposit(ctx, p.ProposalID, params.Depositor)
 		}
 
 		if matchVoter && matchDepositor && matchStatus {
@@ -180,44 +167,13 @@ func (keeper Keeper) SetProposalID(ctx sdk.Context, proposalID uint64) {
 	store.Set(types.ProposalIDKey, types.GetProposalIDBytes(proposalID))
 }
 
-func (keeper Keeper) ActivateVotingPeriod(ctx sdk.Context, proposal types.Proposal) {
+func (keeper Keeper) activateVotingPeriod(ctx sdk.Context, proposal types.Proposal) {
 	proposal.VotingStartTime = ctx.BlockHeader().Time
 	votingPeriod := keeper.GetVotingParams(ctx).VotingPeriod
 	proposal.VotingEndTime = proposal.VotingStartTime.Add(votingPeriod)
 	proposal.Status = types.StatusVotingPeriod
 	keeper.SetProposal(ctx, proposal)
 
-	keeper.RemoveFromInactiveProposalQueue(ctx, proposal.ProposalId, proposal.DepositEndTime)
-	keeper.InsertActiveProposalQueue(ctx, proposal.ProposalId, proposal.VotingEndTime)
-}
-
-func (keeper Keeper) MarshalProposal(proposal types.Proposal) ([]byte, error) {
-	bz, err := keeper.cdc.MarshalBinaryBare(&proposal)
-	if err != nil {
-		return nil, err
-	}
-	return bz, nil
-}
-
-func (keeper Keeper) UnmarshalProposal(bz []byte, proposal *types.Proposal) error {
-	err := keeper.cdc.UnmarshalBinaryBare(bz, proposal)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (keeper Keeper) MustMarshalProposal(proposal types.Proposal) []byte {
-	bz, err := keeper.MarshalProposal(proposal)
-	if err != nil {
-		panic(err)
-	}
-	return bz
-}
-
-func (keeper Keeper) MustUnmarshalProposal(bz []byte, proposal *types.Proposal) {
-	err := keeper.UnmarshalProposal(bz, proposal)
-	if err != nil {
-		panic(err)
-	}
+	keeper.RemoveFromInactiveProposalQueue(ctx, proposal.ProposalID, proposal.DepositEndTime)
+	keeper.InsertActiveProposalQueue(ctx, proposal.ProposalID, proposal.VotingEndTime)
 }

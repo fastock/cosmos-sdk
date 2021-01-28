@@ -6,11 +6,11 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/cosmos/cosmos-sdk/x/distribution/types"
-	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
+	"github.com/cosmos/cosmos-sdk/x/staking/exported"
 )
 
 // initialize rewards for a new validator
-func (k Keeper) initializeValidator(ctx sdk.Context, val stakingtypes.ValidatorI) {
+func (k Keeper) initializeValidator(ctx sdk.Context, val exported.ValidatorI) {
 	// set initial historical rewards (period 0) with reference count of 1
 	k.SetValidatorHistoricalRewards(ctx, val.GetOperator(), 0, types.NewValidatorHistoricalRewards(sdk.DecCoins{}, 1))
 
@@ -21,11 +21,11 @@ func (k Keeper) initializeValidator(ctx sdk.Context, val stakingtypes.ValidatorI
 	k.SetValidatorAccumulatedCommission(ctx, val.GetOperator(), types.InitialValidatorAccumulatedCommission())
 
 	// set outstanding rewards
-	k.SetValidatorOutstandingRewards(ctx, val.GetOperator(), types.ValidatorOutstandingRewards{Rewards: sdk.DecCoins{}})
+	k.SetValidatorOutstandingRewards(ctx, val.GetOperator(), sdk.DecCoins{})
 }
 
 // increment validator period, returning the period just ended
-func (k Keeper) IncrementValidatorPeriod(ctx sdk.Context, val stakingtypes.ValidatorI) uint64 {
+func (k Keeper) incrementValidatorPeriod(ctx sdk.Context, val exported.ValidatorI) uint64 {
 	// fetch current rewards
 	rewards := k.GetValidatorCurrentRewards(ctx, val.GetOperator())
 
@@ -38,7 +38,7 @@ func (k Keeper) IncrementValidatorPeriod(ctx sdk.Context, val stakingtypes.Valid
 		feePool := k.GetFeePool(ctx)
 		outstanding := k.GetValidatorOutstandingRewards(ctx, val.GetOperator())
 		feePool.CommunityPool = feePool.CommunityPool.Add(rewards.Rewards...)
-		outstanding.Rewards = outstanding.GetRewards().Sub(rewards.Rewards)
+		outstanding = outstanding.Sub(rewards.Rewards)
 		k.SetFeePool(ctx, feePool)
 		k.SetValidatorOutstandingRewards(ctx, val.GetOperator(), outstanding)
 
@@ -95,7 +95,7 @@ func (k Keeper) updateValidatorSlashFraction(ctx sdk.Context, valAddr sdk.ValAdd
 	val := k.stakingKeeper.Validator(ctx, valAddr)
 
 	// increment current period
-	newPeriod := k.IncrementValidatorPeriod(ctx, val)
+	newPeriod := k.incrementValidatorPeriod(ctx, val)
 
 	// increment reference count on period we need to track
 	k.incrementReferenceCount(ctx, valAddr, newPeriod)

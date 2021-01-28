@@ -1,43 +1,40 @@
-package types_test
+package types
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/cosmos/cosmos-sdk/testutil/network"
-	"github.com/cosmos/cosmos-sdk/x/auth/types"
+	"github.com/cosmos/cosmos-sdk/tests/mocks"
 )
 
+var errFoo = errors.New("dummy")
+
 func TestAccountRetriever(t *testing.T) {
-	cfg := network.DefaultConfig()
-	cfg.NumValidators = 1
+	mockCtrl := gomock.NewController(t)
+	defer mockCtrl.Finish()
 
-	network := network.New(t, cfg)
-	defer network.Cleanup()
-
-	_, err := network.WaitForHeight(3)
+	mockNodeQuerier := mocks.NewMockNodeQuerier(mockCtrl)
+	accRetr := NewAccountRetriever(mockNodeQuerier)
+	addr := []byte("test")
+	bs, err := ModuleCdc.MarshalJSON(NewQueryAccountParams(addr))
 	require.NoError(t, err)
 
-	val := network.Validators[0]
-	clientCtx := val.ClientCtx
-	ar := types.AccountRetriever{}
+	mockNodeQuerier.EXPECT().QueryWithData(gomock.Eq("custom/acc/account"),
+		gomock.Eq(bs)).Return(nil, int64(0), errFoo).Times(1)
+	_, err = accRetr.GetAccount(addr)
+	require.Error(t, err)
 
-	clientCtx = clientCtx.WithHeight(2)
+	mockNodeQuerier.EXPECT().QueryWithData(gomock.Eq("custom/acc/account"),
+		gomock.Eq(bs)).Return(nil, int64(0), errFoo).Times(1)
+	n, s, err := accRetr.GetAccountNumberSequence(addr)
+	require.Error(t, err)
+	require.Equal(t, uint64(0), n)
+	require.Equal(t, uint64(0), s)
 
-	acc, err := ar.GetAccount(clientCtx, val.Address)
-	require.NoError(t, err)
-	require.NotNil(t, acc)
-
-	acc, height, err := ar.GetAccountWithHeight(clientCtx, val.Address)
-	require.NoError(t, err)
-	require.NotNil(t, acc)
-	require.Equal(t, height, int64(2))
-
-	require.NoError(t, ar.EnsureExists(clientCtx, val.Address))
-
-	accNum, accSeq, err := ar.GetAccountNumberSequence(clientCtx, val.Address)
-	require.NoError(t, err)
-	require.Equal(t, accNum, uint64(0))
-	require.Equal(t, accSeq, uint64(1))
+	mockNodeQuerier.EXPECT().QueryWithData(gomock.Eq("custom/acc/account"),
+		gomock.Eq(bs)).Return(nil, int64(0), errFoo).Times(1)
+	require.Error(t, accRetr.EnsureExists(addr))
 }

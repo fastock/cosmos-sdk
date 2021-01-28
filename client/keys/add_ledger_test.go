@@ -3,23 +3,21 @@
 package keys
 
 import (
-	"context"
-	"fmt"
 	"testing"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tendermint/tendermint/libs/cli"
 
-	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
-	"github.com/cosmos/cosmos-sdk/crypto/hd"
-	"github.com/cosmos/cosmos-sdk/crypto/keyring"
-	"github.com/cosmos/cosmos-sdk/testutil"
+	"github.com/cosmos/cosmos-sdk/crypto/keys"
+	"github.com/cosmos/cosmos-sdk/tests"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
 func Test_runAddCmdLedgerWithCustomCoinType(t *testing.T) {
+	runningUnattended := isRunningUnattended()
 	config := sdk.GetConfig()
 
 	bech32PrefixAccAddr := "terra"
@@ -36,43 +34,39 @@ func Test_runAddCmdLedgerWithCustomCoinType(t *testing.T) {
 	config.SetBech32PrefixForConsensusNode(bech32PrefixConsAddr, bech32PrefixConsPub)
 
 	cmd := AddKeyCommand()
-	cmd.Flags().AddFlagSet(Commands("home").PersistentFlags())
+	require.NotNil(t, cmd)
 
 	// Prepare a keybase
-	kbHome := t.TempDir()
+	kbHome, kbCleanUp := tests.NewTestCaseDir(t)
+	require.NotNil(t, kbHome)
+	defer kbCleanUp()
+	viper.Set(flags.FlagHome, kbHome)
+	viper.Set(flags.FlagUseLedger, true)
 
-	clientCtx := client.Context{}.WithKeyringDir(kbHome)
-	ctx := context.WithValue(context.Background(), client.ClientContextKey, &clientCtx)
-
-	cmd.SetArgs([]string{
-		"keyname1",
-		fmt.Sprintf("--%s=true", flags.FlagUseLedger),
-		fmt.Sprintf("--%s=0", flagAccount),
-		fmt.Sprintf("--%s=0", flagIndex),
-		fmt.Sprintf("--%s=330", flagCoinType),
-		fmt.Sprintf("--%s=%s", cli.OutputFlag, OutputFormatText),
-		fmt.Sprintf("--%s=%s", flags.FlagKeyAlgorithm, string(hd.Secp256k1Type)),
-		fmt.Sprintf("--%s=%s", flags.FlagKeyringBackend, keyring.BackendTest),
-	})
-
-	mockIn := testutil.ApplyMockIODiscardOutErr(cmd)
+	/// Test Text
+	viper.Set(cli.OutputFlag, OutputFormatText)
+	// Now enter password
+	mockIn, _, _ := tests.ApplyMockIO(cmd)
 	mockIn.Reset("test1234\ntest1234\n")
-	require.NoError(t, cmd.ExecuteContext(ctx))
+	require.NoError(t, runAddCmd(cmd, []string{"keyname1"}))
 
 	// Now check that it has been stored properly
-	kb, err := keyring.New(sdk.KeyringServiceName(), keyring.BackendTest, kbHome, mockIn)
+	kb, err := keys.NewKeyring(sdk.KeyringServiceName(), viper.GetString(flags.FlagKeyringBackend), viper.GetString(flags.FlagHome), mockIn)
 	require.NoError(t, err)
 	require.NotNil(t, kb)
-	t.Cleanup(func() {
-		_ = kb.Delete("keyname1")
-	})
+	defer func() {
+		kb.Delete("keyname1", "", false)
+	}()
 	mockIn.Reset("test1234\n")
-	key1, err := kb.Key("keyname1")
+	if runningUnattended {
+		mockIn.Reset("test1234\ntest1234\n")
+	}
+	key1, err := kb.Get("keyname1")
 	require.NoError(t, err)
 	require.NotNil(t, key1)
 
 	require.Equal(t, "keyname1", key1.GetName())
-	require.Equal(t, keyring.TypeLedger, key1.GetType())
+	require.Equal(t, keys.TypeLedger, key1.GetType())
 	require.Equal(t,
 		"terrapub1addwnpepqvpg7r26nl2pvqqern00m6s9uaax3hauu2rzg8qpjzq9hy6xve7sw0d84m6",
 		sdk.MustBech32ifyPubKey(sdk.Bech32PubKeyTypeAccPub, key1.GetPubKey()))
@@ -85,42 +79,41 @@ func Test_runAddCmdLedgerWithCustomCoinType(t *testing.T) {
 }
 
 func Test_runAddCmdLedger(t *testing.T) {
+	runningUnattended := isRunningUnattended()
 	cmd := AddKeyCommand()
-	cmd.Flags().AddFlagSet(Commands("home").PersistentFlags())
+	require.NotNil(t, cmd)
+	mockIn, _, _ := tests.ApplyMockIO(cmd)
 
-	mockIn := testutil.ApplyMockIODiscardOutErr(cmd)
-	kbHome := t.TempDir()
+	// Prepare a keybase
+	kbHome, kbCleanUp := tests.NewTestCaseDir(t)
+	require.NotNil(t, kbHome)
+	defer kbCleanUp()
+	viper.Set(flags.FlagHome, kbHome)
+	viper.Set(flags.FlagUseLedger, true)
 
-	clientCtx := client.Context{}.WithKeyringDir(kbHome)
-	ctx := context.WithValue(context.Background(), client.ClientContextKey, &clientCtx)
-
-	cmd.SetArgs([]string{
-		"keyname1",
-		fmt.Sprintf("--%s=true", flags.FlagUseLedger),
-		fmt.Sprintf("--%s=%s", cli.OutputFlag, OutputFormatText),
-		fmt.Sprintf("--%s=%s", flags.FlagKeyAlgorithm, string(hd.Secp256k1Type)),
-		fmt.Sprintf("--%s=%d", flagCoinType, sdk.CoinType),
-		fmt.Sprintf("--%s=%s", flags.FlagKeyringBackend, keyring.BackendTest),
-	})
+	/// Test Text
+	viper.Set(cli.OutputFlag, OutputFormatText)
+	// Now enter password
 	mockIn.Reset("test1234\ntest1234\n")
-
-	require.NoError(t, cmd.ExecuteContext(ctx))
+	require.NoError(t, runAddCmd(cmd, []string{"keyname1"}))
 
 	// Now check that it has been stored properly
-	kb, err := keyring.New(sdk.KeyringServiceName(), keyring.BackendTest, kbHome, mockIn)
+	kb, err := keys.NewKeyring(sdk.KeyringServiceName(), viper.GetString(flags.FlagKeyringBackend), kbHome, mockIn)
 	require.NoError(t, err)
 	require.NotNil(t, kb)
-	t.Cleanup(func() {
-		_ = kb.Delete("keyname1")
-	})
-
+	defer func() {
+		kb.Delete("keyname1", "", false)
+	}()
 	mockIn.Reset("test1234\n")
-	key1, err := kb.Key("keyname1")
+	if runningUnattended {
+		mockIn.Reset("test1234\ntest1234\n")
+	}
+	key1, err := kb.Get("keyname1")
 	require.NoError(t, err)
 	require.NotNil(t, key1)
 
 	require.Equal(t, "keyname1", key1.GetName())
-	require.Equal(t, keyring.TypeLedger, key1.GetType())
+	require.Equal(t, keys.TypeLedger, key1.GetType())
 	require.Equal(t,
 		"cosmospub1addwnpepqd87l8xhcnrrtzxnkql7k55ph8fr9jarf4hn6udwukfprlalu8lgw0urza0",
 		sdk.MustBech32ifyPubKey(sdk.Bech32PubKeyTypeAccPub, key1.GetPubKey()))

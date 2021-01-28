@@ -3,10 +3,10 @@ package tracekv
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 
 	"github.com/cosmos/cosmos-sdk/store/types"
-	"github.com/cosmos/cosmos-sdk/types/errors"
 )
 
 const (
@@ -60,7 +60,6 @@ func (tkv *Store) Get(key []byte) []byte {
 // Set implements the KVStore interface. It traces a write operation and
 // delegates the Set call to the parent KVStore.
 func (tkv *Store) Set(key []byte, value []byte) {
-	types.AssertValidKey(key)
 	writeOperation(tkv.writer, writeOp, tkv.context, key, value)
 	tkv.parent.Set(key, value)
 }
@@ -146,8 +145,8 @@ func (ti *traceIterator) Value() []byte {
 }
 
 // Close implements the Iterator interface.
-func (ti *traceIterator) Close() error {
-	return ti.parent.Close()
+func (ti *traceIterator) Close() {
+	ti.parent.Close()
 }
 
 // Error delegates the Error call to the parent iterator.
@@ -161,14 +160,14 @@ func (tkv *Store) GetStoreType() types.StoreType {
 	return tkv.parent.GetStoreType()
 }
 
-// CacheWrap implements the KVStore interface. It panics because a Store
-// cannot be branched.
+// CacheWrap implements the KVStore interface. It panics as a Store
+// cannot be cache wrapped.
 func (tkv *Store) CacheWrap() types.CacheWrap {
 	panic("cannot CacheWrap a Store")
 }
 
 // CacheWrapWithTrace implements the KVStore interface. It panics as a
-// Store cannot be branched.
+// Store cannot be cache wrapped.
 func (tkv *Store) CacheWrapWithTrace(_ io.Writer, _ types.TraceContext) types.CacheWrap {
 	panic("cannot CacheWrapWithTrace a Store")
 }
@@ -188,11 +187,11 @@ func writeOperation(w io.Writer, op operation, tc types.TraceContext, key, value
 
 	raw, err := json.Marshal(traceOp)
 	if err != nil {
-		panic(errors.Wrap(err, "failed to serialize trace operation"))
+		panic(fmt.Sprintf("failed to serialize trace operation: %v", err))
 	}
 
 	if _, err := w.Write(raw); err != nil {
-		panic(errors.Wrap(err, "failed to write trace operation"))
+		panic(fmt.Sprintf("failed to write trace operation: %v", err))
 	}
 
 	io.WriteString(w, "\n")

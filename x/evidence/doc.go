@@ -20,10 +20,12 @@ A full setup of the evidence module may look something as follows:
 	  evidence.AppModuleBasic{},
 	)
 
-	// First, create the keeper
+	// First, create the keeper's subspace for parameters and the keeper itself.
+	evidenceParamspace := app.ParamsKeeper.Subspace(evidence.DefaultParamspace)
 	evidenceKeeper := evidence.NewKeeper(
-	  appCodec, keys[evidence.StoreKey], &app.StakingKeeper, app.SlashingKeeper,
+	  app.cdc, keys[evidence.StoreKey], evidenceParamspace, evidence.DefaultCodespace,
 	)
+
 
 	// Second, create the evidence Handler and register all desired routes.
 	evidenceRouter := evidence.NewRouter().
@@ -32,11 +34,9 @@ A full setup of the evidence module may look something as follows:
 
 	evidenceKeeper.SetRouter(evidenceRouter)
 
-	app.EvidenceKeeper = *evidenceKeeper
-
 	app.mm = module.NewManager(
 	  // ...
-	  evidence.NewAppModule(app.EvidenceKeeper),
+	  evidence.NewAppModule(evidenceKeeper),
 	)
 
 	// Remaining application bootstrapping...

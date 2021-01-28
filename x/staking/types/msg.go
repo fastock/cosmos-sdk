@@ -2,69 +2,70 @@ package types
 
 import (
 	"bytes"
-	"fmt"
-	"strconv"
-	"strings"
+	"encoding/json"
 
-	"github.com/gogo/protobuf/proto"
+	"github.com/tendermint/tendermint/crypto"
+	yaml "gopkg.in/yaml.v2"
 
-	rosettatypes "github.com/coinbase/rosetta-sdk-go/types"
-
-	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
-	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
-	"github.com/cosmos/cosmos-sdk/server/rosetta"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 )
 
-// staking message types
-const (
-	TypeMsgUndelegate      = "begin_unbonding"
-	TypeMsgEditValidator   = "edit_validator"
-	TypeMsgCreateValidator = "create_validator"
-	TypeMsgDelegate        = "delegate"
-	TypeMsgBeginRedelegate = "begin_redelegate"
+// ensure Msg interface compliance at compile time
+var (
+	_ sdk.Msg = &MsgCreateValidator{}
+	_ sdk.Msg = &MsgEditValidator{}
+	_ sdk.Msg = &MsgDelegate{}
+	_ sdk.Msg = &MsgUndelegate{}
+	_ sdk.Msg = &MsgBeginRedelegate{}
 )
 
-var (
-	_ sdk.Msg                            = &MsgCreateValidator{}
-	_ codectypes.UnpackInterfacesMessage = (*MsgCreateValidator)(nil)
-	_ sdk.Msg                            = &MsgCreateValidator{}
-	_ sdk.Msg                            = &MsgEditValidator{}
-	_ sdk.Msg                            = &MsgDelegate{}
-	_ sdk.Msg                            = &MsgUndelegate{}
-	_ sdk.Msg                            = &MsgBeginRedelegate{}
-)
+//______________________________________________________________________
+
+// MsgCreateValidator - struct for bonding transactions
+type MsgCreateValidator struct {
+	Description       Description     `json:"description" yaml:"description"`
+	Commission        CommissionRates `json:"commission" yaml:"commission"`
+	MinSelfDelegation sdk.Int         `json:"min_self_delegation" yaml:"min_self_delegation"`
+	DelegatorAddress  sdk.AccAddress  `json:"delegator_address" yaml:"delegator_address"`
+	ValidatorAddress  sdk.ValAddress  `json:"validator_address" yaml:"validator_address"`
+	PubKey            crypto.PubKey   `json:"pubkey" yaml:"pubkey"`
+	Value             sdk.Coin        `json:"value" yaml:"value"`
+}
+
+type msgCreateValidatorJSON struct {
+	Description       Description     `json:"description" yaml:"description"`
+	Commission        CommissionRates `json:"commission" yaml:"commission"`
+	MinSelfDelegation sdk.Int         `json:"min_self_delegation" yaml:"min_self_delegation"`
+	DelegatorAddress  sdk.AccAddress  `json:"delegator_address" yaml:"delegator_address"`
+	ValidatorAddress  sdk.ValAddress  `json:"validator_address" yaml:"validator_address"`
+	PubKey            string          `json:"pubkey" yaml:"pubkey"`
+	Value             sdk.Coin        `json:"value" yaml:"value"`
+}
 
 // NewMsgCreateValidator creates a new MsgCreateValidator instance.
 // Delegator address and validator address are the same.
 func NewMsgCreateValidator(
-	valAddr sdk.ValAddress, pubKey cryptotypes.PubKey, //nolint:interfacer
-	selfDelegation sdk.Coin, description Description, commission CommissionRates, minSelfDelegation sdk.Int,
-) (*MsgCreateValidator, error) {
-	var pkAny *codectypes.Any
-	if pubKey != nil {
-		var err error
-		if pkAny, err = codectypes.NewAnyWithValue(pubKey); err != nil {
-			return nil, err
-		}
-	}
-	return &MsgCreateValidator{
+	valAddr sdk.ValAddress, pubKey crypto.PubKey, selfDelegation sdk.Coin,
+	description Description, commission CommissionRates, minSelfDelegation sdk.Int,
+) MsgCreateValidator {
+
+	return MsgCreateValidator{
 		Description:       description,
-		DelegatorAddress:  sdk.AccAddress(valAddr).String(),
-		ValidatorAddress:  valAddr.String(),
-		Pubkey:            pkAny,
+		DelegatorAddress:  sdk.AccAddress(valAddr),
+		ValidatorAddress:  valAddr,
+		PubKey:            pubKey,
 		Value:             selfDelegation,
 		Commission:        commission,
 		MinSelfDelegation: minSelfDelegation,
-	}, nil
+	}
 }
 
 // Route implements the sdk.Msg interface.
 func (msg MsgCreateValidator) Route() string { return RouterKey }
 
 // Type implements the sdk.Msg interface.
-func (msg MsgCreateValidator) Type() string { return TypeMsgCreateValidator }
+func (msg MsgCreateValidator) Type() string { return "create_validator" }
 
 // GetSigners implements the sdk.Msg interface. It returns the address(es) that
 // must sign over msg.GetSignBytes().
@@ -72,95 +73,138 @@ func (msg MsgCreateValidator) Type() string { return TypeMsgCreateValidator }
 // sign the msg as well.
 func (msg MsgCreateValidator) GetSigners() []sdk.AccAddress {
 	// delegator is first signer so delegator pays fees
-	delAddr, err := sdk.AccAddressFromBech32(msg.DelegatorAddress)
-	if err != nil {
-		panic(err)
+	addrs := []sdk.AccAddress{msg.DelegatorAddress}
+
+	if !bytes.Equal(msg.DelegatorAddress.Bytes(), msg.ValidatorAddress.Bytes()) {
+		addrs = append(addrs, sdk.AccAddress(msg.ValidatorAddress))
 	}
-	addrs := []sdk.AccAddress{delAddr}
-	addr, err := sdk.ValAddressFromBech32(msg.ValidatorAddress)
-	if err != nil {
-		panic(err)
-	}
-	if !bytes.Equal(delAddr.Bytes(), addr.Bytes()) {
-		addrs = append(addrs, sdk.AccAddress(addr))
+	return addrs
+}
+
+// MarshalJSON implements the json.Marshaler interface to provide custom JSON
+// serialization of the MsgCreateValidator type.
+func (msg MsgCreateValidator) MarshalJSON() ([]byte, error) {
+	return json.Marshal(msgCreateValidatorJSON{
+		Description:       msg.Description,
+		Commission:        msg.Commission,
+		DelegatorAddress:  msg.DelegatorAddress,
+		ValidatorAddress:  msg.ValidatorAddress,
+		PubKey:            sdk.MustBech32ifyPubKey(sdk.Bech32PubKeyTypeConsPub, msg.PubKey),
+		Value:             msg.Value,
+		MinSelfDelegation: msg.MinSelfDelegation,
+	})
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface to provide custom
+// JSON deserialization of the MsgCreateValidator type.
+func (msg *MsgCreateValidator) UnmarshalJSON(bz []byte) error {
+	var msgCreateValJSON msgCreateValidatorJSON
+	if err := json.Unmarshal(bz, &msgCreateValJSON); err != nil {
+		return err
 	}
 
-	return addrs
+	msg.Description = msgCreateValJSON.Description
+	msg.Commission = msgCreateValJSON.Commission
+	msg.DelegatorAddress = msgCreateValJSON.DelegatorAddress
+	msg.ValidatorAddress = msgCreateValJSON.ValidatorAddress
+	var err error
+	msg.PubKey, err = sdk.GetPubKeyFromBech32(sdk.Bech32PubKeyTypeConsPub, msgCreateValJSON.PubKey)
+	if err != nil {
+		return err
+	}
+	msg.Value = msgCreateValJSON.Value
+	msg.MinSelfDelegation = msgCreateValJSON.MinSelfDelegation
+
+	return nil
+}
+
+// MarshalYAML implements a custom marshal yaml function due to consensus pubkey.
+func (msg MsgCreateValidator) MarshalYAML() (interface{}, error) {
+	bs, err := yaml.Marshal(struct {
+		Description       Description
+		Commission        CommissionRates
+		MinSelfDelegation sdk.Int
+		DelegatorAddress  sdk.AccAddress
+		ValidatorAddress  sdk.ValAddress
+		PubKey            string
+		Value             sdk.Coin
+	}{
+		Description:       msg.Description,
+		Commission:        msg.Commission,
+		MinSelfDelegation: msg.MinSelfDelegation,
+		DelegatorAddress:  msg.DelegatorAddress,
+		ValidatorAddress:  msg.ValidatorAddress,
+		PubKey:            sdk.MustBech32ifyPubKey(sdk.Bech32PubKeyTypeConsPub, msg.PubKey),
+		Value:             msg.Value,
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return string(bs), nil
 }
 
 // GetSignBytes returns the message bytes to sign over.
 func (msg MsgCreateValidator) GetSignBytes() []byte {
-	bz := ModuleCdc.MustMarshalJSON(&msg)
+	bz := ModuleCdc.MustMarshalJSON(msg)
 	return sdk.MustSortJSON(bz)
 }
 
 // ValidateBasic implements the sdk.Msg interface.
 func (msg MsgCreateValidator) ValidateBasic() error {
 	// note that unmarshaling from bech32 ensures either empty or valid
-	delAddr, err := sdk.AccAddressFromBech32(msg.DelegatorAddress)
-	if err != nil {
-		return err
-	}
-	if delAddr.Empty() {
+	if msg.DelegatorAddress.Empty() {
 		return ErrEmptyDelegatorAddr
 	}
-
-	if msg.ValidatorAddress == "" {
+	if msg.ValidatorAddress.Empty() {
 		return ErrEmptyValidatorAddr
 	}
-
-	valAddr, err := sdk.ValAddressFromBech32(msg.ValidatorAddress)
-	if err != nil {
-		return err
-	}
-	if !sdk.AccAddress(valAddr).Equals(delAddr) {
+	if !sdk.AccAddress(msg.ValidatorAddress).Equals(msg.DelegatorAddress) {
 		return ErrBadValidatorAddr
 	}
-
-	if msg.Pubkey == nil {
-		return ErrEmptyValidatorPubKey
-	}
-
-	if !msg.Value.IsValid() || !msg.Value.Amount.IsPositive() {
+	if !msg.Value.Amount.IsPositive() {
 		return ErrBadDelegationAmount
 	}
-
 	if msg.Description == (Description{}) {
 		return sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "empty description")
 	}
-
 	if msg.Commission == (CommissionRates{}) {
 		return sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "empty commission")
 	}
-
 	if err := msg.Commission.Validate(); err != nil {
 		return err
 	}
-
 	if !msg.MinSelfDelegation.IsPositive() {
 		return ErrMinSelfDelegationInvalid
 	}
-
-	if msg.Value.Amount.LT(msg.MinSelfDelegation) {
+	if msg.Value.Amount.LT(msg.MinSelfDelegation.ToDec()) {
 		return ErrSelfDelegationBelowMinimum
 	}
 
 	return nil
 }
 
-// UnpackInterfaces implements UnpackInterfacesMessage.UnpackInterfaces
-func (msg MsgCreateValidator) UnpackInterfaces(unpacker codectypes.AnyUnpacker) error {
-	var pubKey cryptotypes.PubKey
-	return unpacker.UnpackAny(msg.Pubkey, &pubKey)
+// MsgEditValidator - struct for editing a validator
+type MsgEditValidator struct {
+	Description      Description    `json:"description" yaml:"description"`
+	ValidatorAddress sdk.ValAddress `json:"address" yaml:"address"`
+
+	// We pass a reference to the new commission rate and min self delegation as it's not mandatory to
+	// update. If not updated, the deserialized rate will be zero with no way to
+	// distinguish if an update was intended.
+	//
+	// REF: #2373
+	CommissionRate    *sdk.Dec `json:"commission_rate" yaml:"commission_rate"`
+	MinSelfDelegation *sdk.Int `json:"min_self_delegation" yaml:"min_self_delegation"`
 }
 
 // NewMsgEditValidator creates a new MsgEditValidator instance
-//nolint:interfacer
-func NewMsgEditValidator(valAddr sdk.ValAddress, description Description, newRate *sdk.Dec, newMinSelfDelegation *sdk.Int) *MsgEditValidator {
-	return &MsgEditValidator{
+func NewMsgEditValidator(valAddr sdk.ValAddress, description Description, newRate *sdk.Dec, newMinSelfDelegation *sdk.Int) MsgEditValidator {
+	return MsgEditValidator{
 		Description:       description,
 		CommissionRate:    newRate,
-		ValidatorAddress:  valAddr.String(),
+		ValidatorAddress:  valAddr,
 		MinSelfDelegation: newMinSelfDelegation,
 	}
 }
@@ -169,37 +213,30 @@ func NewMsgEditValidator(valAddr sdk.ValAddress, description Description, newRat
 func (msg MsgEditValidator) Route() string { return RouterKey }
 
 // Type implements the sdk.Msg interface.
-func (msg MsgEditValidator) Type() string { return TypeMsgEditValidator }
+func (msg MsgEditValidator) Type() string { return "edit_validator" }
 
 // GetSigners implements the sdk.Msg interface.
 func (msg MsgEditValidator) GetSigners() []sdk.AccAddress {
-	valAddr, err := sdk.ValAddressFromBech32(msg.ValidatorAddress)
-	if err != nil {
-		panic(err)
-	}
-	return []sdk.AccAddress{valAddr.Bytes()}
+	return []sdk.AccAddress{sdk.AccAddress(msg.ValidatorAddress)}
 }
 
 // GetSignBytes implements the sdk.Msg interface.
 func (msg MsgEditValidator) GetSignBytes() []byte {
-	bz := ModuleCdc.MustMarshalJSON(&msg)
+	bz := ModuleCdc.MustMarshalJSON(msg)
 	return sdk.MustSortJSON(bz)
 }
 
 // ValidateBasic implements the sdk.Msg interface.
 func (msg MsgEditValidator) ValidateBasic() error {
-	if msg.ValidatorAddress == "" {
+	if msg.ValidatorAddress.Empty() {
 		return ErrEmptyValidatorAddr
 	}
-
 	if msg.Description == (Description{}) {
 		return sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "empty description")
 	}
-
 	if msg.MinSelfDelegation != nil && !msg.MinSelfDelegation.IsPositive() {
 		return ErrMinSelfDelegationInvalid
 	}
-
 	if msg.CommissionRate != nil {
 		if msg.CommissionRate.GT(sdk.OneDec()) || msg.CommissionRate.IsNegative() {
 			return sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "commission rate must be between 0 and 1 (inclusive)")
@@ -209,12 +246,18 @@ func (msg MsgEditValidator) ValidateBasic() error {
 	return nil
 }
 
+// MsgDelegate - struct for bonding transactions
+type MsgDelegate struct {
+	DelegatorAddress sdk.AccAddress `json:"delegator_address" yaml:"delegator_address"`
+	ValidatorAddress sdk.ValAddress `json:"validator_address" yaml:"validator_address"`
+	Amount           sdk.Coin       `json:"amount" yaml:"amount"`
+}
+
 // NewMsgDelegate creates a new MsgDelegate instance.
-//nolint:interfacer
-func NewMsgDelegate(delAddr sdk.AccAddress, valAddr sdk.ValAddress, amount sdk.Coin) *MsgDelegate {
-	return &MsgDelegate{
-		DelegatorAddress: delAddr.String(),
-		ValidatorAddress: valAddr.String(),
+func NewMsgDelegate(delAddr sdk.AccAddress, valAddr sdk.ValAddress, amount sdk.Coin) MsgDelegate {
+	return MsgDelegate{
+		DelegatorAddress: delAddr,
+		ValidatorAddress: valAddr,
 		Amount:           amount,
 	}
 }
@@ -223,133 +266,51 @@ func NewMsgDelegate(delAddr sdk.AccAddress, valAddr sdk.ValAddress, amount sdk.C
 func (msg MsgDelegate) Route() string { return RouterKey }
 
 // Type implements the sdk.Msg interface.
-func (msg MsgDelegate) Type() string { return TypeMsgDelegate }
+func (msg MsgDelegate) Type() string { return "delegate" }
 
 // GetSigners implements the sdk.Msg interface.
 func (msg MsgDelegate) GetSigners() []sdk.AccAddress {
-	delAddr, err := sdk.AccAddressFromBech32(msg.DelegatorAddress)
-	if err != nil {
-		panic(err)
-	}
-	return []sdk.AccAddress{delAddr}
+	return []sdk.AccAddress{msg.DelegatorAddress}
 }
 
 // GetSignBytes implements the sdk.Msg interface.
 func (msg MsgDelegate) GetSignBytes() []byte {
-	bz := ModuleCdc.MustMarshalJSON(&msg)
+	bz := ModuleCdc.MustMarshalJSON(msg)
 	return sdk.MustSortJSON(bz)
 }
 
 // ValidateBasic implements the sdk.Msg interface.
 func (msg MsgDelegate) ValidateBasic() error {
-	if msg.DelegatorAddress == "" {
+	if msg.DelegatorAddress.Empty() {
 		return ErrEmptyDelegatorAddr
 	}
-
-	if msg.ValidatorAddress == "" {
+	if msg.ValidatorAddress.Empty() {
 		return ErrEmptyValidatorAddr
 	}
-
-	if !msg.Amount.IsValid() || !msg.Amount.Amount.IsPositive() {
+	if !msg.Amount.Amount.IsPositive() {
 		return ErrBadDelegationAmount
 	}
-
 	return nil
 }
 
-// Rosetta Msg interface.
-func (msg *MsgDelegate) ToOperations(withStatus bool, hasError bool) []*rosettatypes.Operation {
-	var operations []*rosettatypes.Operation
-	delAddr := msg.DelegatorAddress
-	valAddr := msg.ValidatorAddress
-	coin := msg.Amount
-	delOp := func(account *rosettatypes.AccountIdentifier, amount string, index int) *rosettatypes.Operation {
-		var status string
-		if withStatus {
-			status = rosetta.StatusSuccess
-			if hasError {
-				status = rosetta.StatusReverted
-			}
-		}
-		return &rosettatypes.Operation{
-			OperationIdentifier: &rosettatypes.OperationIdentifier{
-				Index: int64(index),
-			},
-			Type:    proto.MessageName(msg),
-			Status:  status,
-			Account: account,
-			Amount: &rosettatypes.Amount{
-				Value: amount,
-				Currency: &rosettatypes.Currency{
-					Symbol: coin.Denom,
-				},
-			},
-		}
-	}
-	delAcc := &rosettatypes.AccountIdentifier{
-		Address: delAddr,
-	}
-	valAcc := &rosettatypes.AccountIdentifier{
-		Address: "staking_account",
-		SubAccount: &rosettatypes.SubAccountIdentifier{
-			Address: valAddr,
-		},
-	}
-	operations = append(operations,
-		delOp(delAcc, "-"+coin.Amount.String(), 0),
-		delOp(valAcc, coin.Amount.String(), 1),
-	)
-	return operations
-}
+//______________________________________________________________________
 
-func (msg *MsgDelegate) FromOperations(ops []*rosettatypes.Operation) (sdk.Msg, error) {
-	var (
-		delAddr sdk.AccAddress
-		valAddr sdk.ValAddress
-		sendAmt sdk.Coin
-		err     error
-	)
-
-	for _, op := range ops {
-		if strings.HasPrefix(op.Amount.Value, "-") {
-			if op.Account == nil {
-				return nil, fmt.Errorf("account identifier must be specified")
-			}
-			delAddr, err = sdk.AccAddressFromBech32(op.Account.Address)
-			if err != nil {
-				return nil, err
-			}
-			continue
-		}
-
-		if op.Account.SubAccount == nil {
-			return nil, fmt.Errorf("account identifier subaccount must be specified")
-		}
-		valAddr, err = sdk.ValAddressFromBech32(op.Account.SubAccount.Address)
-		if err != nil {
-			return nil, err
-		}
-
-		amount, err := strconv.ParseInt(op.Amount.Value, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid amount: %w", err)
-		}
-
-		sendAmt = sdk.NewCoin(op.Amount.Currency.Symbol, sdk.NewInt(amount))
-	}
-
-	return NewMsgDelegate(delAddr, valAddr, sendAmt), nil
+// MsgBeginRedelegate defines the attributes of a bonding transaction.
+type MsgBeginRedelegate struct {
+	DelegatorAddress    sdk.AccAddress `json:"delegator_address" yaml:"delegator_address"`
+	ValidatorSrcAddress sdk.ValAddress `json:"validator_src_address" yaml:"validator_src_address"`
+	ValidatorDstAddress sdk.ValAddress `json:"validator_dst_address" yaml:"validator_dst_address"`
+	Amount              sdk.Coin       `json:"amount" yaml:"amount"`
 }
 
 // NewMsgBeginRedelegate creates a new MsgBeginRedelegate instance.
-//nolint:interfacer
 func NewMsgBeginRedelegate(
 	delAddr sdk.AccAddress, valSrcAddr, valDstAddr sdk.ValAddress, amount sdk.Coin,
-) *MsgBeginRedelegate {
-	return &MsgBeginRedelegate{
-		DelegatorAddress:    delAddr.String(),
-		ValidatorSrcAddress: valSrcAddr.String(),
-		ValidatorDstAddress: valDstAddr.String(),
+) MsgBeginRedelegate {
+	return MsgBeginRedelegate{
+		DelegatorAddress:    delAddr,
+		ValidatorSrcAddress: valSrcAddr,
+		ValidatorDstAddress: valDstAddr,
 		Amount:              amount,
 	}
 }
@@ -358,147 +319,48 @@ func NewMsgBeginRedelegate(
 func (msg MsgBeginRedelegate) Route() string { return RouterKey }
 
 // Type implements the sdk.Msg interface
-func (msg MsgBeginRedelegate) Type() string { return TypeMsgBeginRedelegate }
+func (msg MsgBeginRedelegate) Type() string { return "begin_redelegate" }
 
 // GetSigners implements the sdk.Msg interface
 func (msg MsgBeginRedelegate) GetSigners() []sdk.AccAddress {
-	delAddr, err := sdk.AccAddressFromBech32(msg.DelegatorAddress)
-	if err != nil {
-		panic(err)
-	}
-	return []sdk.AccAddress{delAddr}
+	return []sdk.AccAddress{msg.DelegatorAddress}
 }
 
 // GetSignBytes implements the sdk.Msg interface.
 func (msg MsgBeginRedelegate) GetSignBytes() []byte {
-	bz := ModuleCdc.MustMarshalJSON(&msg)
+	bz := ModuleCdc.MustMarshalJSON(msg)
 	return sdk.MustSortJSON(bz)
 }
 
 // ValidateBasic implements the sdk.Msg interface.
 func (msg MsgBeginRedelegate) ValidateBasic() error {
-	if msg.DelegatorAddress == "" {
+	if msg.DelegatorAddress.Empty() {
 		return ErrEmptyDelegatorAddr
 	}
-
-	if msg.ValidatorSrcAddress == "" {
+	if msg.ValidatorSrcAddress.Empty() {
 		return ErrEmptyValidatorAddr
 	}
-
-	if msg.ValidatorDstAddress == "" {
+	if msg.ValidatorDstAddress.Empty() {
 		return ErrEmptyValidatorAddr
 	}
-
-	if !msg.Amount.IsValid() || !msg.Amount.Amount.IsPositive() {
+	if !msg.Amount.Amount.IsPositive() {
 		return ErrBadSharesAmount
 	}
-
 	return nil
 }
 
-// Rosetta Msg interface.
-func (msg *MsgBeginRedelegate) ToOperations(withStatus bool, hasError bool) []*rosettatypes.Operation {
-	var operations []*rosettatypes.Operation
-	delAddr := msg.DelegatorAddress
-	srcValAddr := msg.ValidatorSrcAddress
-	destValAddr := msg.ValidatorDstAddress
-	coin := msg.Amount
-	delOp := func(account *rosettatypes.AccountIdentifier, amount string, index int) *rosettatypes.Operation {
-		var status string
-		if withStatus {
-			status = rosetta.StatusSuccess
-			if hasError {
-				status = rosetta.StatusReverted
-			}
-		}
-		return &rosettatypes.Operation{
-			OperationIdentifier: &rosettatypes.OperationIdentifier{
-				Index: int64(index),
-			},
-			Type:    proto.MessageName(msg),
-			Status:  status,
-			Account: account,
-			Amount: &rosettatypes.Amount{
-				Value: amount,
-				Currency: &rosettatypes.Currency{
-					Symbol: coin.Denom,
-				},
-			},
-		}
-	}
-	srcValAcc := &rosettatypes.AccountIdentifier{
-		Address: delAddr,
-		SubAccount: &rosettatypes.SubAccountIdentifier{
-			Address: srcValAddr,
-		},
-	}
-	destValAcc := &rosettatypes.AccountIdentifier{
-		Address: "staking_account",
-		SubAccount: &rosettatypes.SubAccountIdentifier{
-			Address: destValAddr,
-		},
-	}
-	operations = append(operations,
-		delOp(srcValAcc, "-"+coin.Amount.String(), 0),
-		delOp(destValAcc, coin.Amount.String(), 1),
-	)
-	return operations
-}
-
-func (msg *MsgBeginRedelegate) FromOperations(ops []*rosettatypes.Operation) (sdk.Msg, error) {
-	var (
-		delAddr     sdk.AccAddress
-		srcValAddr  sdk.ValAddress
-		destValAddr sdk.ValAddress
-		sendAmt     sdk.Coin
-		err         error
-	)
-
-	for _, op := range ops {
-		if strings.HasPrefix(op.Amount.Value, "-") {
-			if op.Account == nil {
-				return nil, fmt.Errorf("account identifier must be specified")
-			}
-			delAddr, err = sdk.AccAddressFromBech32(op.Account.Address)
-			if err != nil {
-				return nil, err
-			}
-
-			if op.Account.SubAccount == nil {
-				return nil, fmt.Errorf("account identifier subaccount must be specified")
-			}
-			srcValAddr, err = sdk.ValAddressFromBech32(op.Account.SubAccount.Address)
-			if err != nil {
-				return nil, err
-			}
-			continue
-		}
-
-		if op.Account.SubAccount == nil {
-			return nil, fmt.Errorf("account identifier subaccount must be specified")
-		}
-		destValAddr, err = sdk.ValAddressFromBech32(op.Account.SubAccount.Address)
-		if err != nil {
-			return nil, err
-		}
-
-		amount, err := strconv.ParseInt(op.Amount.Value, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid amount: %w", err)
-		}
-
-		sendAmt = sdk.NewCoin(op.Amount.Currency.Symbol, sdk.NewInt(amount))
-	}
-
-	return NewMsgBeginRedelegate(delAddr, srcValAddr, destValAddr, sendAmt), nil
+// MsgUndelegate - struct for unbonding transactions
+type MsgUndelegate struct {
+	DelegatorAddress sdk.AccAddress `json:"delegator_address" yaml:"delegator_address"`
+	ValidatorAddress sdk.ValAddress `json:"validator_address" yaml:"validator_address"`
+	Amount           sdk.Coin       `json:"amount" yaml:"amount"`
 }
 
 // NewMsgUndelegate creates a new MsgUndelegate instance.
-//nolint:interfacer
-func NewMsgUndelegate(delAddr sdk.AccAddress, valAddr sdk.ValAddress, amount sdk.Coin) *MsgUndelegate {
-	return &MsgUndelegate{
-		DelegatorAddress: delAddr.String(),
-		ValidatorAddress: valAddr.String(),
+func NewMsgUndelegate(delAddr sdk.AccAddress, valAddr sdk.ValAddress, amount sdk.Coin) MsgUndelegate {
+	return MsgUndelegate{
+		DelegatorAddress: delAddr,
+		ValidatorAddress: valAddr,
 		Amount:           amount,
 	}
 }
@@ -507,121 +369,27 @@ func NewMsgUndelegate(delAddr sdk.AccAddress, valAddr sdk.ValAddress, amount sdk
 func (msg MsgUndelegate) Route() string { return RouterKey }
 
 // Type implements the sdk.Msg interface.
-func (msg MsgUndelegate) Type() string { return TypeMsgUndelegate }
+func (msg MsgUndelegate) Type() string { return "begin_unbonding" }
 
 // GetSigners implements the sdk.Msg interface.
-func (msg MsgUndelegate) GetSigners() []sdk.AccAddress {
-	delAddr, err := sdk.AccAddressFromBech32(msg.DelegatorAddress)
-	if err != nil {
-		panic(err)
-	}
-	return []sdk.AccAddress{delAddr}
-}
+func (msg MsgUndelegate) GetSigners() []sdk.AccAddress { return []sdk.AccAddress{msg.DelegatorAddress} }
 
 // GetSignBytes implements the sdk.Msg interface.
 func (msg MsgUndelegate) GetSignBytes() []byte {
-	bz := ModuleCdc.MustMarshalJSON(&msg)
+	bz := ModuleCdc.MustMarshalJSON(msg)
 	return sdk.MustSortJSON(bz)
 }
 
 // ValidateBasic implements the sdk.Msg interface.
 func (msg MsgUndelegate) ValidateBasic() error {
-	if msg.DelegatorAddress == "" {
+	if msg.DelegatorAddress.Empty() {
 		return ErrEmptyDelegatorAddr
 	}
-
-	if msg.ValidatorAddress == "" {
+	if msg.ValidatorAddress.Empty() {
 		return ErrEmptyValidatorAddr
 	}
-
-	if !msg.Amount.IsValid() || !msg.Amount.Amount.IsPositive() {
+	if !msg.Amount.Amount.IsPositive() {
 		return ErrBadSharesAmount
 	}
-
 	return nil
-}
-
-// Rosetta Msg interface.
-func (msg *MsgUndelegate) ToOperations(withStatus bool, hasError bool) []*rosettatypes.Operation {
-	var operations []*rosettatypes.Operation
-	delAddr := msg.DelegatorAddress
-	valAddr := msg.ValidatorAddress
-	coin := msg.Amount
-	delOp := func(account *rosettatypes.AccountIdentifier, amount string, index int) *rosettatypes.Operation {
-		var status string
-		if withStatus {
-			status = rosetta.StatusSuccess
-			if hasError {
-				status = rosetta.StatusReverted
-			}
-		}
-		return &rosettatypes.Operation{
-			OperationIdentifier: &rosettatypes.OperationIdentifier{
-				Index: int64(index),
-			},
-			Type:    proto.MessageName(msg),
-			Status:  status,
-			Account: account,
-			Amount: &rosettatypes.Amount{
-				Value: amount,
-				Currency: &rosettatypes.Currency{
-					Symbol: coin.Denom,
-				},
-			},
-		}
-	}
-	delAcc := &rosettatypes.AccountIdentifier{
-		Address: delAddr,
-	}
-	valAcc := &rosettatypes.AccountIdentifier{
-		Address: "staking_account",
-		SubAccount: &rosettatypes.SubAccountIdentifier{
-			Address: valAddr,
-		},
-	}
-	operations = append(operations,
-		delOp(valAcc, "-"+coin.Amount.String(), 0),
-		delOp(delAcc, coin.Amount.String(), 1),
-	)
-	return operations
-}
-
-func (msg *MsgUndelegate) FromOperations(ops []*rosettatypes.Operation) (sdk.Msg, error) {
-	var (
-		delAddr  sdk.AccAddress
-		valAddr  sdk.ValAddress
-		undelAmt sdk.Coin
-		err      error
-	)
-
-	for _, op := range ops {
-		if strings.HasPrefix(op.Amount.Value, "-") {
-			if op.Account.SubAccount == nil {
-				return nil, fmt.Errorf("account identifier subaccount must be specified")
-			}
-			valAddr, err = sdk.ValAddressFromBech32(op.Account.SubAccount.Address)
-			if err != nil {
-				return nil, err
-			}
-			continue
-		}
-
-		if op.Account == nil {
-			return nil, fmt.Errorf("account identifier must be specified")
-		}
-
-		delAddr, err = sdk.AccAddressFromBech32(op.Account.Address)
-		if err != nil {
-			return nil, err
-		}
-
-		amount, err := strconv.ParseInt(op.Amount.Value, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid amount")
-		}
-
-		undelAmt = sdk.NewCoin(op.Amount.Currency.Symbol, sdk.NewInt(amount))
-	}
-
-	return NewMsgUndelegate(delAddr, valAddr, undelAmt), nil
 }

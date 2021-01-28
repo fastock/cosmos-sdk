@@ -3,8 +3,7 @@ package types
 import (
 	"encoding/json"
 
-	"github.com/cosmos/cosmos-sdk/client"
-	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
+	"github.com/tendermint/tendermint/crypto"
 )
 
 // DONTCOVER
@@ -17,7 +16,7 @@ type (
 	// targeted one.
 	//
 	// TODO: MigrationCallback should also return an error upon failure.
-	MigrationCallback func(AppMap, client.Context) AppMap
+	MigrationCallback func(AppMap) AppMap
 
 	// MigrationMap defines a mapping from a version to a MigrationCallback.
 	MigrationMap map[string]MigrationCallback
@@ -30,15 +29,17 @@ const ModuleName = "genutil"
 type InitConfig struct {
 	ChainID   string
 	GenTxsDir string
+	Name      string
 	NodeID    string
-	ValPubKey cryptotypes.PubKey
+	ValPubKey crypto.PubKey
 }
 
 // NewInitConfig creates a new InitConfig object
-func NewInitConfig(chainID, genTxsDir, nodeID string, valPubKey cryptotypes.PubKey) InitConfig {
+func NewInitConfig(chainID, genTxsDir, name, nodeID string, valPubKey crypto.PubKey) InitConfig {
 	return InitConfig{
 		ChainID:   chainID,
 		GenTxsDir: genTxsDir,
+		Name:      name,
 		NodeID:    nodeID,
 		ValPubKey: valPubKey,
 	}

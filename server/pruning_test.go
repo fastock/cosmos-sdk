@@ -12,29 +12,24 @@ import (
 func TestGetPruningOptionsFromFlags(t *testing.T) {
 	tests := []struct {
 		name            string
-		initParams      func() *viper.Viper
+		initParams      func()
 		expectedOptions types.PruningOptions
 		wantErr         bool
 	}{
 		{
 			name: FlagPruning,
-			initParams: func() *viper.Viper {
-				v := viper.New()
-				v.Set(FlagPruning, types.PruningOptionNothing)
-				return v
+			initParams: func() {
+				viper.Set(FlagPruning, types.PruningOptionNothing)
 			},
 			expectedOptions: types.PruneNothing,
 		},
 		{
 			name: "custom pruning options",
-			initParams: func() *viper.Viper {
-				v := viper.New()
-				v.Set(FlagPruning, types.PruningOptionCustom)
-				v.Set(FlagPruningKeepRecent, 1234)
-				v.Set(FlagPruningKeepEvery, 4321)
-				v.Set(FlagPruningInterval, 10)
-
-				return v
+			initParams: func() {
+				viper.Set(FlagPruning, types.PruningOptionCustom)
+				viper.Set(FlagPruningKeepRecent, 1234)
+				viper.Set(FlagPruningKeepEvery, 4321)
+				viper.Set(FlagPruningInterval, 10)
 			},
 			expectedOptions: types.PruningOptions{
 				KeepRecent: 1234,
@@ -43,12 +38,8 @@ func TestGetPruningOptionsFromFlags(t *testing.T) {
 			},
 		},
 		{
-			name: types.PruningOptionDefault,
-			initParams: func() *viper.Viper {
-				v := viper.New()
-				v.Set(FlagPruning, types.PruningOptionDefault)
-				return v
-			},
+			name:            types.PruningOptionDefault,
+			initParams:      func() {},
 			expectedOptions: types.PruneDefault,
 		},
 	}
@@ -59,9 +50,9 @@ func TestGetPruningOptionsFromFlags(t *testing.T) {
 		t.Run(tt.name, func(j *testing.T) {
 			viper.Reset()
 			viper.SetDefault(FlagPruning, types.PruningOptionDefault)
-			v := tt.initParams()
+			tt.initParams()
 
-			opts, err := GetPruningOptionsFromFlags(v)
+			opts, err := GetPruningOptionsFromFlags()
 			if tt.wantErr {
 				require.Error(t, err)
 				return

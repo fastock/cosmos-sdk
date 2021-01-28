@@ -97,7 +97,7 @@ func (s Store) Iterator(start, end []byte) types.Iterator {
 	return newPrefixIterator(s.prefix, start, end, iter)
 }
 
-// ReverseIterator implements KVStore
+// Implements KVStore
 // Check https://github.com/tendermint/tendermint/blob/master/libs/db/prefix_db.go#L129
 func (s Store) ReverseIterator(start, end []byte) types.Iterator {
 	newstart := cloneAppend(s.prefix, start)
@@ -117,11 +117,10 @@ func (s Store) ReverseIterator(start, end []byte) types.Iterator {
 var _ types.Iterator = (*prefixIterator)(nil)
 
 type prefixIterator struct {
-	prefix []byte
-	start  []byte
-	end    []byte
-	iter   types.Iterator
-	valid  bool
+	prefix     []byte
+	start, end []byte
+	iter       types.Iterator
+	valid      bool
 }
 
 func newPrefixIterator(prefix, start, end []byte, parent types.Iterator) *prefixIterator {
@@ -135,57 +134,53 @@ func newPrefixIterator(prefix, start, end []byte, parent types.Iterator) *prefix
 }
 
 // Implements Iterator
-func (pi *prefixIterator) Domain() ([]byte, []byte) {
-	return pi.start, pi.end
+func (iter *prefixIterator) Domain() ([]byte, []byte) {
+	return iter.start, iter.end
 }
 
 // Implements Iterator
-func (pi *prefixIterator) Valid() bool {
-	return pi.valid && pi.iter.Valid()
+func (iter *prefixIterator) Valid() bool {
+	return iter.valid && iter.iter.Valid()
 }
 
 // Implements Iterator
-func (pi *prefixIterator) Next() {
-	if !pi.valid {
+func (iter *prefixIterator) Next() {
+	if !iter.valid {
 		panic("prefixIterator invalid, cannot call Next()")
 	}
-
-	if pi.iter.Next(); !pi.iter.Valid() || !bytes.HasPrefix(pi.iter.Key(), pi.prefix) {
-		// TODO: shouldn't pi be set to nil instead?
-		pi.valid = false
+	iter.iter.Next()
+	if !iter.iter.Valid() || !bytes.HasPrefix(iter.iter.Key(), iter.prefix) {
+		iter.valid = false
 	}
 }
 
 // Implements Iterator
-func (pi *prefixIterator) Key() (key []byte) {
-	if !pi.valid {
+func (iter *prefixIterator) Key() (key []byte) {
+	if !iter.valid {
 		panic("prefixIterator invalid, cannot call Key()")
 	}
-
-	key = pi.iter.Key()
-	key = stripPrefix(key, pi.prefix)
-
+	key = iter.iter.Key()
+	key = stripPrefix(key, iter.prefix)
 	return
 }
 
 // Implements Iterator
-func (pi *prefixIterator) Value() []byte {
-	if !pi.valid {
+func (iter *prefixIterator) Value() []byte {
+	if !iter.valid {
 		panic("prefixIterator invalid, cannot call Value()")
 	}
-
-	return pi.iter.Value()
+	return iter.iter.Value()
 }
 
 // Implements Iterator
-func (pi *prefixIterator) Close() error {
-	return pi.iter.Close()
+func (iter *prefixIterator) Close() {
+	iter.iter.Close()
 }
 
 // Error returns an error if the prefixIterator is invalid defined by the Valid
 // method.
-func (pi *prefixIterator) Error() error {
-	if !pi.Valid() {
+func (iter *prefixIterator) Error() error {
+	if !iter.Valid() {
 		return errors.New("invalid prefixIterator")
 	}
 
@@ -197,7 +192,6 @@ func stripPrefix(key []byte, prefix []byte) []byte {
 	if len(key) < len(prefix) || !bytes.Equal(key[:len(prefix)], prefix) {
 		panic("should not happen")
 	}
-
 	return key[len(prefix):]
 }
 

@@ -1,17 +1,22 @@
 package cli
 
 import (
+	"bufio"
+
 	"github.com/spf13/cobra"
 
 	"github.com/cosmos/cosmos-sdk/client"
+	"github.com/cosmos/cosmos-sdk/client/context"
 	"github.com/cosmos/cosmos-sdk/client/flags"
-	"github.com/cosmos/cosmos-sdk/client/tx"
+	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/cosmos/cosmos-sdk/x/bank/types"
+	"github.com/cosmos/cosmos-sdk/x/auth"
+	"github.com/cosmos/cosmos-sdk/x/auth/client/utils"
+	"github.com/cosmos/cosmos-sdk/x/bank/internal/types"
 )
 
-// NewTxCmd returns a root CLI command handler for all x/bank transaction commands.
-func NewTxCmd() *cobra.Command {
+// GetTxCmd returns the transaction commands for this module
+func GetTxCmd(cdc *codec.Codec) *cobra.Command {
 	txCmd := &cobra.Command{
 		Use:                        types.ModuleName,
 		Short:                      "Bank transaction subcommands",
@@ -19,45 +24,41 @@ func NewTxCmd() *cobra.Command {
 		SuggestionsMinimumDistance: 2,
 		RunE:                       client.ValidateCmd,
 	}
-
-	txCmd.AddCommand(NewSendTxCmd())
-
+	txCmd.AddCommand(
+		SendTxCmd(cdc),
+	)
 	return txCmd
 }
 
-// NewSendTxCmd returns a CLI command handler for creating a MsgSend transaction.
-func NewSendTxCmd() *cobra.Command {
+// SendTxCmd will create a send tx and sign it with the given key.
+func SendTxCmd(cdc *codec.Codec) *cobra.Command {
 	cmd := &cobra.Command{
-		Use: "send [from_key_or_address] [to_address] [amount]",
-		Short: `Send funds from one account to another. Note, the'--from' flag is
-ignored as it is implied from [from_key_or_address].`,
-		Args: cobra.ExactArgs(3),
+		Use:   "send [from_key_or_address] [to_address] [amount]",
+		Short: "Create and sign a send tx",
+		Args:  cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cmd.Flags().Set(flags.FlagFrom, args[0])
-			clientCtx, err := client.GetClientTxContext(cmd)
-			if err != nil {
-				return err
-			}
-			toAddr, err := sdk.AccAddressFromBech32(args[1])
-			if err != nil {
-				return err
-			}
+			inBuf := bufio.NewReader(cmd.InOrStdin())
+			txBldr := auth.NewTxBuilderFromCLI(inBuf).WithTxEncoder(utils.GetTxEncoder(cdc))
+			cliCtx := context.NewCLIContextWithInputAndFrom(inBuf, args[0]).WithCodec(cdc)
 
-			coins, err := sdk.ParseCoinsNormalized(args[2])
+			to, err := sdk.AccAddressFromBech32(args[1])
 			if err != nil {
 				return err
 			}
 
-			msg := types.NewMsgSend(clientCtx.GetFromAddress(), toAddr, coins)
-			if err := msg.ValidateBasic(); err != nil {
+			// parse coins trying to be sent
+			coins, err := sdk.ParseCoins(args[2])
+			if err != nil {
 				return err
 			}
 
-			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msg)
+			// build and sign the transaction, then broadcast to Tendermint
+			msg := types.NewMsgSend(cliCtx.GetFromAddress(), to, coins)
+			return utils.GenerateOrBroadcastMsgs(cliCtx, txBldr, []sdk.Msg{msg})
 		},
 	}
 
-	flags.AddTxFlagsToCmd(cmd)
+	cmd = flags.PostCommands(cmd)[0]
 
 	return cmd
 }

@@ -5,13 +5,47 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/cosmos/cosmos-sdk/client"
-	"github.com/cosmos/cosmos-sdk/client/tx"
-	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/cosmos/cosmos-sdk/types/rest"
+	"github.com/cosmos/cosmos-sdk/client/context"
+	"github.com/cosmos/cosmos-sdk/x/auth/client/utils"
 	"github.com/cosmos/cosmos-sdk/x/distribution/client/common"
 	"github.com/cosmos/cosmos-sdk/x/distribution/types"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/types/rest"
 )
+
+func registerTxRoutes(cliCtx context.CLIContext, r *mux.Router, queryRoute string) {
+	// Withdraw all delegator rewards
+	r.HandleFunc(
+		"/distribution/delegators/{delegatorAddr}/rewards",
+		withdrawDelegatorRewardsHandlerFn(cliCtx, queryRoute),
+	).Methods("POST")
+
+	// Withdraw delegation rewards
+	r.HandleFunc(
+		"/distribution/delegators/{delegatorAddr}/rewards/{validatorAddr}",
+		withdrawDelegationRewardsHandlerFn(cliCtx),
+	).Methods("POST")
+
+	// Replace the rewards withdrawal address
+	r.HandleFunc(
+		"/distribution/delegators/{delegatorAddr}/withdraw_address",
+		setDelegatorWithdrawalAddrHandlerFn(cliCtx),
+	).Methods("POST")
+
+	// Withdraw validator rewards and commission
+	r.HandleFunc(
+		"/distribution/validators/{validatorAddr}/rewards",
+		withdrawValidatorRewardsHandlerFn(cliCtx),
+	).Methods("POST")
+
+	// Fund the community pool
+	r.HandleFunc(
+		"/distribution/community_pool",
+		fundCommunityPoolHandlerFn(cliCtx),
+	).Methods("POST")
+
+}
 
 type (
 	withdrawRewardsReq struct {
@@ -29,42 +63,11 @@ type (
 	}
 )
 
-func registerTxHandlers(clientCtx client.Context, r *mux.Router) {
-	// Withdraw all delegator rewards
-	r.HandleFunc(
-		"/distribution/delegators/{delegatorAddr}/rewards",
-		newWithdrawDelegatorRewardsHandlerFn(clientCtx),
-	).Methods("POST")
-
-	// Withdraw delegation rewards
-	r.HandleFunc(
-		"/distribution/delegators/{delegatorAddr}/rewards/{validatorAddr}",
-		newWithdrawDelegationRewardsHandlerFn(clientCtx),
-	).Methods("POST")
-
-	// Replace the rewards withdrawal address
-	r.HandleFunc(
-		"/distribution/delegators/{delegatorAddr}/withdraw_address",
-		newSetDelegatorWithdrawalAddrHandlerFn(clientCtx),
-	).Methods("POST")
-
-	// Withdraw validator rewards and commission
-	r.HandleFunc(
-		"/distribution/validators/{validatorAddr}/rewards",
-		newWithdrawValidatorRewardsHandlerFn(clientCtx),
-	).Methods("POST")
-
-	// Fund the community pool
-	r.HandleFunc(
-		"/distribution/community_pool",
-		newFundCommunityPoolHandlerFn(clientCtx),
-	).Methods("POST")
-}
-
-func newWithdrawDelegatorRewardsHandlerFn(clientCtx client.Context) http.HandlerFunc {
+// Withdraw delegator rewards
+func withdrawDelegatorRewardsHandlerFn(cliCtx context.CLIContext, queryRoute string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req withdrawRewardsReq
-		if !rest.ReadRESTReq(w, r, clientCtx.LegacyAmino, &req) {
+		if !rest.ReadRESTReq(w, r, cliCtx.Codec, &req) {
 			return
 		}
 
@@ -79,19 +82,22 @@ func newWithdrawDelegatorRewardsHandlerFn(clientCtx client.Context) http.Handler
 			return
 		}
 
-		msgs, err := common.WithdrawAllDelegatorRewards(clientCtx, delAddr)
-		if rest.CheckInternalServerError(w, err) {
+		msgs, err := common.WithdrawAllDelegatorRewards(cliCtx, queryRoute, delAddr)
+		if err != nil {
+			rest.WriteErrorResponse(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
-		tx.WriteGeneratedTxResponse(clientCtx, w, req.BaseReq, msgs...)
+		utils.WriteGenerateStdTxResponse(w, cliCtx, req.BaseReq, msgs)
 	}
 }
 
-func newWithdrawDelegationRewardsHandlerFn(clientCtx client.Context) http.HandlerFunc {
+// Withdraw delegation rewards
+func withdrawDelegationRewardsHandlerFn(cliCtx context.CLIContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req withdrawRewardsReq
-		if !rest.ReadRESTReq(w, r, clientCtx.LegacyAmino, &req) {
+
+		if !rest.ReadRESTReq(w, r, cliCtx.Codec, &req) {
 			return
 		}
 
@@ -112,18 +118,21 @@ func newWithdrawDelegationRewardsHandlerFn(clientCtx client.Context) http.Handle
 		}
 
 		msg := types.NewMsgWithdrawDelegatorReward(delAddr, valAddr)
-		if rest.CheckBadRequestError(w, msg.ValidateBasic()) {
+		if err := msg.ValidateBasic(); err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
-		tx.WriteGeneratedTxResponse(clientCtx, w, req.BaseReq, msg)
+		utils.WriteGenerateStdTxResponse(w, cliCtx, req.BaseReq, []sdk.Msg{msg})
 	}
 }
 
-func newSetDelegatorWithdrawalAddrHandlerFn(clientCtx client.Context) http.HandlerFunc {
+// Replace the rewards withdrawal address
+func setDelegatorWithdrawalAddrHandlerFn(cliCtx context.CLIContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req setWithdrawalAddrReq
-		if !rest.ReadRESTReq(w, r, clientCtx.LegacyAmino, &req) {
+
+		if !rest.ReadRESTReq(w, r, cliCtx.Codec, &req) {
 			return
 		}
 
@@ -139,18 +148,21 @@ func newSetDelegatorWithdrawalAddrHandlerFn(clientCtx client.Context) http.Handl
 		}
 
 		msg := types.NewMsgSetWithdrawAddress(delAddr, req.WithdrawAddress)
-		if rest.CheckBadRequestError(w, msg.ValidateBasic()) {
+		if err := msg.ValidateBasic(); err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
-		tx.WriteGeneratedTxResponse(clientCtx, w, req.BaseReq, msg)
+		utils.WriteGenerateStdTxResponse(w, cliCtx, req.BaseReq, []sdk.Msg{msg})
 	}
 }
 
-func newWithdrawValidatorRewardsHandlerFn(clientCtx client.Context) http.HandlerFunc {
+// Withdraw validator rewards and commission
+func withdrawValidatorRewardsHandlerFn(cliCtx context.CLIContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req withdrawRewardsReq
-		if !rest.ReadRESTReq(w, r, clientCtx.LegacyAmino, &req) {
+
+		if !rest.ReadRESTReq(w, r, cliCtx.Codec, &req) {
 			return
 		}
 
@@ -167,18 +179,19 @@ func newWithdrawValidatorRewardsHandlerFn(clientCtx client.Context) http.Handler
 
 		// prepare multi-message transaction
 		msgs, err := common.WithdrawValidatorRewardsAndCommission(valAddr)
-		if rest.CheckBadRequestError(w, err) {
+		if err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
-		tx.WriteGeneratedTxResponse(clientCtx, w, req.BaseReq, msgs...)
+		utils.WriteGenerateStdTxResponse(w, cliCtx, req.BaseReq, msgs)
 	}
 }
 
-func newFundCommunityPoolHandlerFn(clientCtx client.Context) http.HandlerFunc {
+func fundCommunityPoolHandlerFn(cliCtx context.CLIContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req fundCommunityPoolReq
-		if !rest.ReadRESTReq(w, r, clientCtx.LegacyAmino, &req) {
+		if !rest.ReadRESTReq(w, r, cliCtx.Codec, &req) {
 			return
 		}
 
@@ -188,16 +201,18 @@ func newFundCommunityPoolHandlerFn(clientCtx client.Context) http.HandlerFunc {
 		}
 
 		fromAddr, err := sdk.AccAddressFromBech32(req.BaseReq.From)
-		if rest.CheckBadRequestError(w, err) {
+		if err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		msg := types.NewMsgFundCommunityPool(req.Amount, fromAddr)
-		if rest.CheckBadRequestError(w, msg.ValidateBasic()) {
+		if err := msg.ValidateBasic(); err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
-		tx.WriteGeneratedTxResponse(clientCtx, w, req.BaseReq, msg)
+		utils.WriteGenerateStdTxResponse(w, cliCtx, req.BaseReq, []sdk.Msg{msg})
 	}
 }
 
@@ -205,7 +220,8 @@ func newFundCommunityPoolHandlerFn(clientCtx client.Context) http.HandlerFunc {
 
 func checkDelegatorAddressVar(w http.ResponseWriter, r *http.Request) (sdk.AccAddress, bool) {
 	addr, err := sdk.AccAddressFromBech32(mux.Vars(r)["delegatorAddr"])
-	if rest.CheckBadRequestError(w, err) {
+	if err != nil {
+		rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 		return nil, false
 	}
 
@@ -214,7 +230,8 @@ func checkDelegatorAddressVar(w http.ResponseWriter, r *http.Request) (sdk.AccAd
 
 func checkValidatorAddressVar(w http.ResponseWriter, r *http.Request) (sdk.ValAddress, bool) {
 	addr, err := sdk.ValAddressFromBech32(mux.Vars(r)["validatorAddr"])
-	if rest.CheckBadRequestError(w, err) {
+	if err != nil {
+		rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 		return nil, false
 	}
 

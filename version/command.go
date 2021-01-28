@@ -2,53 +2,48 @@ package version
 
 import (
 	"encoding/json"
-	"strings"
+	"fmt"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+	"gopkg.in/yaml.v2"
+
 	"github.com/tendermint/tendermint/libs/cli"
-	yaml "gopkg.in/yaml.v2"
 )
 
 const flagLong = "long"
 
-func NewVersionCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "version",
-		Short: "Print the application binary version information",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			verInfo := NewInfo()
-			cmd.SetOut(cmd.OutOrStdout())
+func init() {
+	Cmd.Flags().Bool(flagLong, false, "Print long version information")
+}
 
-			if long, _ := cmd.Flags().GetBool(flagLong); !long {
-				cmd.Println(verInfo.Version)
-				return nil
-			}
+// Cmd prints out the application's version information passed via build flags.
+var Cmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print the app version",
+	RunE: func(_ *cobra.Command, _ []string) error {
+		verInfo := NewInfo()
 
-			var (
-				bz  []byte
-				err error
-			)
-
-			output, _ := cmd.Flags().GetString(cli.OutputFlag)
-			switch strings.ToLower(output) {
-			case "json":
-				bz, err = json.Marshal(verInfo)
-
-			default:
-				bz, err = yaml.Marshal(&verInfo)
-			}
-
-			if err != nil {
-				return err
-			}
-
-			cmd.Println(string(bz))
+		if !viper.GetBool(flagLong) {
+			fmt.Println(verInfo.Version)
 			return nil
-		},
-	}
+		}
 
-	cmd.Flags().Bool(flagLong, false, "Print long version information")
-	cmd.Flags().StringP(cli.OutputFlag, "o", "text", "Output format (text|json)")
+		var bz []byte
+		var err error
 
-	return cmd
+		switch viper.GetString(cli.OutputFlag) {
+		case "json":
+			bz, err = json.Marshal(verInfo)
+		default:
+			bz, err = yaml.Marshal(&verInfo)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		_, err = fmt.Println(string(bz))
+		return err
+	},
 }

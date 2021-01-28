@@ -1,125 +1,102 @@
 package evidence_test
 
 import (
-	"fmt"
 	"testing"
-	"time"
 
-	"github.com/stretchr/testify/require"
-	"github.com/stretchr/testify/suite"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-
-	"github.com/cosmos/cosmos-sdk/crypto/keys/ed25519"
 	"github.com/cosmos/cosmos-sdk/simapp"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/evidence"
-	"github.com/cosmos/cosmos-sdk/x/evidence/exported"
-	"github.com/cosmos/cosmos-sdk/x/evidence/keeper"
-	"github.com/cosmos/cosmos-sdk/x/evidence/types"
+	"github.com/cosmos/cosmos-sdk/x/evidence/internal/types"
+
+	"github.com/stretchr/testify/suite"
+	abci "github.com/tendermint/tendermint/abci/types"
+	"github.com/tendermint/tendermint/crypto/ed25519"
 )
 
 type HandlerTestSuite struct {
 	suite.Suite
 
+	ctx     sdk.Context
 	handler sdk.Handler
-	app     *simapp.SimApp
-}
-
-func testMsgSubmitEvidence(r *require.Assertions, e exported.Evidence, s sdk.AccAddress) exported.MsgSubmitEvidenceI {
-	msg, err := types.NewMsgSubmitEvidence(s, e)
-	r.NoError(err)
-	return msg
-}
-
-func testEquivocationHandler(k interface{}) types.Handler {
-	return func(ctx sdk.Context, e exported.Evidence) error {
-		if err := e.ValidateBasic(); err != nil {
-			return err
-		}
-
-		ee, ok := e.(*types.Equivocation)
-		if !ok {
-			return fmt.Errorf("unexpected evidence type: %T", e)
-		}
-		if ee.Height%2 == 0 {
-			return fmt.Errorf("unexpected even evidence height: %d", ee.Height)
-		}
-
-		return nil
-	}
+	keeper  evidence.Keeper
 }
 
 func (suite *HandlerTestSuite) SetupTest() {
 	checkTx := false
 	app := simapp.Setup(checkTx)
 
+	// get the app's codec and register custom testing types
+	cdc := app.Codec()
+	cdc.RegisterConcrete(types.TestEquivocationEvidence{}, "test/TestEquivocationEvidence", nil)
+
 	// recreate keeper in order to use custom testing types
-	evidenceKeeper := keeper.NewKeeper(
-		app.AppCodec(), app.GetKey(types.StoreKey), app.StakingKeeper, app.SlashingKeeper,
+	evidenceKeeper := evidence.NewKeeper(
+		cdc, app.GetKey(evidence.StoreKey), app.GetSubspace(evidence.ModuleName), app.StakingKeeper, app.SlashingKeeper,
 	)
-	router := types.NewRouter()
-	router = router.AddRoute(types.RouteEquivocation, testEquivocationHandler(*evidenceKeeper))
+	router := evidence.NewRouter()
+	router = router.AddRoute(types.TestEvidenceRouteEquivocation, types.TestEquivocationHandler(*evidenceKeeper))
 	evidenceKeeper.SetRouter(router)
 
-	app.EvidenceKeeper = *evidenceKeeper
-
+	suite.ctx = app.BaseApp.NewContext(checkTx, abci.Header{Height: 1})
 	suite.handler = evidence.NewHandler(*evidenceKeeper)
-	suite.app = app
+	suite.keeper = *evidenceKeeper
 }
 
-func (suite *HandlerTestSuite) TestMsgSubmitEvidence() {
+func (suite *HandlerTestSuite) TestMsgSubmitEvidence_Valid() {
 	pk := ed25519.GenPrivKey()
-	s := sdk.AccAddress("test________________")
-
-	testCases := []struct {
-		msg       sdk.Msg
-		expectErr bool
-	}{
-		{
-			testMsgSubmitEvidence(
-				suite.Require(),
-				&types.Equivocation{
-					Height:           11,
-					Time:             time.Now().UTC(),
-					Power:            100,
-					ConsensusAddress: pk.PubKey().Address().String(),
-				},
-				s,
-			),
-			false,
-		},
-		{
-			testMsgSubmitEvidence(
-				suite.Require(),
-				&types.Equivocation{
-					Height:           10,
-					Time:             time.Now().UTC(),
-					Power:            100,
-					ConsensusAddress: pk.PubKey().Address().String(),
-				},
-				s,
-			),
-			true,
-		},
+	sv := types.TestVote{
+		ValidatorAddress: pk.PubKey().Address(),
+		Height:           11,
+		Round:            0,
 	}
 
-	for i, tc := range testCases {
-		ctx := suite.app.BaseApp.NewContext(false, tmproto.Header{Height: suite.app.LastBlockHeight() + 1})
+	sig, err := pk.Sign(sv.SignBytes(suite.ctx.ChainID()))
+	suite.NoError(err)
+	sv.Signature = sig
 
-		res, err := suite.handler(ctx, tc.msg)
-		if tc.expectErr {
-			suite.Require().Error(err, "expected error; tc #%d", i)
-		} else {
-			suite.Require().NoError(err, "unexpected error; tc #%d", i)
-			suite.Require().NotNil(res, "expected non-nil result; tc #%d", i)
-
-			msg := tc.msg.(exported.MsgSubmitEvidenceI)
-
-			var resultData types.MsgSubmitEvidenceResponse
-			suite.app.AppCodec().UnmarshalBinaryBare(res.Data, &resultData)
-			suite.Require().Equal(msg.GetEvidence().Hash().Bytes(), resultData.Hash, "invalid hash; tc #%d", i)
-		}
+	s := sdk.AccAddress("test")
+	e := types.TestEquivocationEvidence{
+		Power:      100,
+		TotalPower: 100000,
+		PubKey:     pk.PubKey(),
+		VoteA:      sv,
+		VoteB:      sv,
 	}
+
+	ctx := suite.ctx.WithIsCheckTx(false)
+	msg := evidence.NewMsgSubmitEvidence(e, s)
+	res, err := suite.handler(ctx, msg)
+	suite.NoError(err)
+	suite.NotNil(res)
+	suite.Equal(e.Hash().Bytes(), res.Data)
+}
+
+func (suite *HandlerTestSuite) TestMsgSubmitEvidence_Invalid() {
+	pk := ed25519.GenPrivKey()
+	sv := types.TestVote{
+		ValidatorAddress: pk.PubKey().Address(),
+		Height:           11,
+		Round:            0,
+	}
+
+	sig, err := pk.Sign(sv.SignBytes(suite.ctx.ChainID()))
+	suite.NoError(err)
+	sv.Signature = sig
+
+	s := sdk.AccAddress("test")
+	e := types.TestEquivocationEvidence{
+		Power:      100,
+		TotalPower: 100000,
+		PubKey:     pk.PubKey(),
+		VoteA:      sv,
+		VoteB:      types.TestVote{Height: 10, Round: 1},
+	}
+
+	ctx := suite.ctx.WithIsCheckTx(false)
+	msg := evidence.NewMsgSubmitEvidence(e, s)
+	res, err := suite.handler(ctx, msg)
+	suite.Error(err)
+	suite.Nil(res)
 }
 
 func TestHandlerTestSuite(t *testing.T) {

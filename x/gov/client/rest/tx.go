@@ -6,28 +6,29 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/cosmos/cosmos-sdk/client"
-	"github.com/cosmos/cosmos-sdk/client/tx"
+	"github.com/cosmos/cosmos-sdk/client/context"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/rest"
+	"github.com/cosmos/cosmos-sdk/x/auth/client/utils"
 	gcutils "github.com/cosmos/cosmos-sdk/x/gov/client/utils"
 	"github.com/cosmos/cosmos-sdk/x/gov/types"
 )
 
-func registerTxHandlers(clientCtx client.Context, r *mux.Router, phs []ProposalRESTHandler) {
+func registerTxRoutes(cliCtx context.CLIContext, r *mux.Router, phs []ProposalRESTHandler) {
 	propSubRtr := r.PathPrefix("/gov/proposals").Subrouter()
 	for _, ph := range phs {
 		propSubRtr.HandleFunc(fmt.Sprintf("/%s", ph.SubRoute), ph.Handler).Methods("POST")
 	}
 
-	r.HandleFunc("/gov/proposals", newPostProposalHandlerFn(clientCtx)).Methods("POST")
-	r.HandleFunc(fmt.Sprintf("/gov/proposals/{%s}/deposits", RestProposalID), newDepositHandlerFn(clientCtx)).Methods("POST")
-	r.HandleFunc(fmt.Sprintf("/gov/proposals/{%s}/votes", RestProposalID), newVoteHandlerFn(clientCtx)).Methods("POST")
+	r.HandleFunc("/gov/proposals", postProposalHandlerFn(cliCtx)).Methods("POST")
+	r.HandleFunc(fmt.Sprintf("/gov/proposals/{%s}/deposits", RestProposalID), depositHandlerFn(cliCtx)).Methods("POST")
+	r.HandleFunc(fmt.Sprintf("/gov/proposals/{%s}/votes", RestProposalID), voteHandlerFn(cliCtx)).Methods("POST")
 }
 
-func newPostProposalHandlerFn(clientCtx client.Context) http.HandlerFunc {
+func postProposalHandlerFn(cliCtx context.CLIContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req PostProposalReq
-		if !rest.ReadRESTReq(w, r, clientCtx.LegacyAmino, &req) {
+		if !rest.ReadRESTReq(w, r, cliCtx.Codec, &req) {
 			return
 		}
 
@@ -39,19 +40,17 @@ func newPostProposalHandlerFn(clientCtx client.Context) http.HandlerFunc {
 		proposalType := gcutils.NormalizeProposalType(req.ProposalType)
 		content := types.ContentFromProposalType(req.Title, req.Description, proposalType)
 
-		msg, err := types.NewMsgSubmitProposal(content, req.InitialDeposit, req.Proposer)
-		if rest.CheckBadRequestError(w, err) {
-			return
-		}
-		if rest.CheckBadRequestError(w, msg.ValidateBasic()) {
+		msg := types.NewMsgSubmitProposal(content, req.InitialDeposit, req.Proposer)
+		if err := msg.ValidateBasic(); err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
-		tx.WriteGeneratedTxResponse(clientCtx, w, req.BaseReq, msg)
+		utils.WriteGenerateStdTxResponse(w, cliCtx, req.BaseReq, []sdk.Msg{msg})
 	}
 }
 
-func newDepositHandlerFn(clientCtx client.Context) http.HandlerFunc {
+func depositHandlerFn(cliCtx context.CLIContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		strProposalID := vars[RestProposalID]
@@ -67,7 +66,7 @@ func newDepositHandlerFn(clientCtx client.Context) http.HandlerFunc {
 		}
 
 		var req DepositReq
-		if !rest.ReadRESTReq(w, r, clientCtx.LegacyAmino, &req) {
+		if !rest.ReadRESTReq(w, r, cliCtx.Codec, &req) {
 			return
 		}
 
@@ -78,15 +77,16 @@ func newDepositHandlerFn(clientCtx client.Context) http.HandlerFunc {
 
 		// create the message
 		msg := types.NewMsgDeposit(req.Depositor, proposalID, req.Amount)
-		if rest.CheckBadRequestError(w, msg.ValidateBasic()) {
+		if err := msg.ValidateBasic(); err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
-		tx.WriteGeneratedTxResponse(clientCtx, w, req.BaseReq, msg)
+		utils.WriteGenerateStdTxResponse(w, cliCtx, req.BaseReq, []sdk.Msg{msg})
 	}
 }
 
-func newVoteHandlerFn(clientCtx client.Context) http.HandlerFunc {
+func voteHandlerFn(cliCtx context.CLIContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		strProposalID := vars[RestProposalID]
@@ -102,7 +102,7 @@ func newVoteHandlerFn(clientCtx client.Context) http.HandlerFunc {
 		}
 
 		var req VoteReq
-		if !rest.ReadRESTReq(w, r, clientCtx.LegacyAmino, &req) {
+		if !rest.ReadRESTReq(w, r, cliCtx.Codec, &req) {
 			return
 		}
 
@@ -112,16 +112,18 @@ func newVoteHandlerFn(clientCtx client.Context) http.HandlerFunc {
 		}
 
 		voteOption, err := types.VoteOptionFromString(gcutils.NormalizeVoteOption(req.Option))
-		if rest.CheckBadRequestError(w, err) {
+		if err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		// create the message
 		msg := types.NewMsgVote(req.Voter, proposalID, voteOption)
-		if rest.CheckBadRequestError(w, msg.ValidateBasic()) {
+		if err := msg.ValidateBasic(); err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
-		tx.WriteGeneratedTxResponse(clientCtx, w, req.BaseReq, msg)
+		utils.WriteGenerateStdTxResponse(w, cliCtx, req.BaseReq, []sdk.Msg{msg})
 	}
 }

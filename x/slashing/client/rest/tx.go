@@ -6,15 +6,18 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/cosmos/cosmos-sdk/client"
-	"github.com/cosmos/cosmos-sdk/client/tx"
+	"github.com/cosmos/cosmos-sdk/client/context"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/rest"
-	"github.com/cosmos/cosmos-sdk/x/slashing/types"
+	"github.com/cosmos/cosmos-sdk/x/auth/client/utils"
+	"github.com/cosmos/cosmos-sdk/x/slashing/internal/types"
 )
 
-func registerTxHandlers(clientCtx client.Context, r *mux.Router) {
-	r.HandleFunc("/slashing/validators/{validatorAddr}/unjail", NewUnjailRequestHandlerFn(clientCtx)).Methods("POST")
+func registerTxRoutes(cliCtx context.CLIContext, r *mux.Router) {
+	r.HandleFunc(
+		"/slashing/validators/{validatorAddr}/unjail",
+		unjailRequestHandlerFn(cliCtx),
+	).Methods("POST")
 }
 
 // Unjail TX body
@@ -22,15 +25,14 @@ type UnjailReq struct {
 	BaseReq rest.BaseReq `json:"base_req" yaml:"base_req"`
 }
 
-// NewUnjailRequestHandlerFn returns an HTTP REST handler for creating a MsgUnjail
-// transaction.
-func NewUnjailRequestHandlerFn(clientCtx client.Context) http.HandlerFunc {
+func unjailRequestHandlerFn(cliCtx context.CLIContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
-		bech32Validator := vars["validatorAddr"]
+
+		bech32validator := vars["validatorAddr"]
 
 		var req UnjailReq
-		if !rest.ReadRESTReq(w, r, clientCtx.LegacyAmino, &req) {
+		if !rest.ReadRESTReq(w, r, cliCtx.Codec, &req) {
 			return
 		}
 
@@ -39,13 +41,15 @@ func NewUnjailRequestHandlerFn(clientCtx client.Context) http.HandlerFunc {
 			return
 		}
 
-		fromAddr, err := sdk.AccAddressFromBech32(req.BaseReq.From)
-		if rest.CheckBadRequestError(w, err) {
+		valAddr, err := sdk.ValAddressFromBech32(bech32validator)
+		if err != nil {
+			rest.WriteErrorResponse(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
-		valAddr, err := sdk.ValAddressFromBech32(bech32Validator)
-		if rest.CheckInternalServerError(w, err) {
+		fromAddr, err := sdk.AccAddressFromBech32(req.BaseReq.From)
+		if err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -55,9 +59,12 @@ func NewUnjailRequestHandlerFn(clientCtx client.Context) http.HandlerFunc {
 		}
 
 		msg := types.NewMsgUnjail(valAddr)
-		if rest.CheckBadRequestError(w, msg.ValidateBasic()) {
+		err = msg.ValidateBasic()
+		if err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		tx.WriteGeneratedTxResponse(clientCtx, w, req.BaseReq, msg)
+
+		utils.WriteGenerateStdTxResponse(w, cliCtx, req.BaseReq, []sdk.Msg{msg})
 	}
 }

@@ -1,156 +1,108 @@
 package evidence_test
 
 import (
-	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/suite"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/types/time"
+	abci "github.com/tendermint/tendermint/abci/types"
+	"github.com/tendermint/tendermint/crypto/ed25519"
 
-	"github.com/cosmos/cosmos-sdk/crypto/keys/ed25519"
 	"github.com/cosmos/cosmos-sdk/simapp"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/evidence"
 	"github.com/cosmos/cosmos-sdk/x/evidence/exported"
-	"github.com/cosmos/cosmos-sdk/x/evidence/keeper"
-	"github.com/cosmos/cosmos-sdk/x/evidence/types"
+	"github.com/cosmos/cosmos-sdk/x/evidence/internal/types"
+
+	"github.com/stretchr/testify/suite"
 )
 
 type GenesisTestSuite struct {
 	suite.Suite
 
 	ctx    sdk.Context
-	keeper keeper.Keeper
+	keeper evidence.Keeper
 }
 
 func (suite *GenesisTestSuite) SetupTest() {
 	checkTx := false
 	app := simapp.Setup(checkTx)
 
-	suite.ctx = app.BaseApp.NewContext(checkTx, tmproto.Header{Height: 1})
-	suite.keeper = app.EvidenceKeeper
-}
+	// get the app's codec and register custom testing types
+	cdc := app.Codec()
+	cdc.RegisterConcrete(types.TestEquivocationEvidence{}, "test/TestEquivocationEvidence", nil)
 
-func (suite *GenesisTestSuite) TestInitGenesis() {
-	var (
-		genesisState *types.GenesisState
-		testEvidence []exported.Evidence
-		pk           = ed25519.GenPrivKey()
+	// recreate keeper in order to use custom testing types
+	evidenceKeeper := evidence.NewKeeper(
+		cdc, app.GetKey(evidence.StoreKey), app.GetSubspace(evidence.ModuleName), app.StakingKeeper, app.SlashingKeeper,
 	)
+	router := evidence.NewRouter()
+	router = router.AddRoute(types.TestEvidenceRouteEquivocation, types.TestEquivocationHandler(*evidenceKeeper))
+	evidenceKeeper.SetRouter(router)
 
-	testCases := []struct {
-		msg       string
-		malleate  func()
-		expPass   bool
-		posttests func()
-	}{
-		{
-			"valid",
-			func() {
-				testEvidence = make([]exported.Evidence, 100)
-				for i := 0; i < 100; i++ {
-					testEvidence[i] = &types.Equivocation{
-						Height:           int64(i + 1),
-						Power:            100,
-						Time:             time.Now().UTC(),
-						ConsensusAddress: pk.PubKey().Address().String(),
-					}
-				}
-				genesisState = types.NewGenesisState(testEvidence)
-			},
-			true,
-			func() {
-				for _, e := range testEvidence {
-					_, ok := suite.keeper.GetEvidence(suite.ctx, e.Hash())
-					suite.True(ok)
-				}
-			},
-		},
-		{
-			"invalid",
-			func() {
-				testEvidence = make([]exported.Evidence, 100)
-				for i := 0; i < 100; i++ {
-					testEvidence[i] = &types.Equivocation{
-						Power:            100,
-						Time:             time.Now().UTC(),
-						ConsensusAddress: pk.PubKey().Address().String(),
-					}
-				}
-				genesisState = types.NewGenesisState(testEvidence)
-			},
-			false,
-			func() {
-				suite.Empty(suite.keeper.GetAllEvidence(suite.ctx))
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		suite.Run(fmt.Sprintf("Case %s", tc.msg), func() {
-			suite.SetupTest()
-
-			tc.malleate()
-
-			if tc.expPass {
-				suite.NotPanics(func() {
-					evidence.InitGenesis(suite.ctx, suite.keeper, genesisState)
-				})
-			} else {
-				suite.Panics(func() {
-					evidence.InitGenesis(suite.ctx, suite.keeper, genesisState)
-				})
-			}
-
-			tc.posttests()
-		})
-	}
+	suite.ctx = app.BaseApp.NewContext(checkTx, abci.Header{Height: 1})
+	suite.keeper = *evidenceKeeper
 }
 
-func (suite *GenesisTestSuite) TestExportGenesis() {
+func (suite *GenesisTestSuite) TestInitGenesis_Valid() {
 	pk := ed25519.GenPrivKey()
 
-	testCases := []struct {
-		msg       string
-		malleate  func()
-		expPass   bool
-		posttests func()
-	}{
-		{
-			"success",
-			func() {
-				suite.keeper.SetEvidence(suite.ctx, &types.Equivocation{
-					Height:           1,
-					Power:            100,
-					Time:             time.Now().UTC(),
-					ConsensusAddress: pk.PubKey().Address().String(),
-				})
-			},
-			true,
-			func() {},
-		},
+	testEvidence := make([]exported.Evidence, 100)
+	for i := 0; i < 100; i++ {
+		sv := types.TestVote{
+			ValidatorAddress: pk.PubKey().Address(),
+			Height:           int64(i),
+			Round:            0,
+		}
+		sig, err := pk.Sign(sv.SignBytes("test-chain"))
+		suite.NoError(err)
+		sv.Signature = sig
+
+		testEvidence[i] = types.TestEquivocationEvidence{
+			Power:      100,
+			TotalPower: 100000,
+			PubKey:     pk.PubKey(),
+			VoteA:      sv,
+			VoteB:      sv,
+		}
 	}
 
-	for _, tc := range testCases {
-		suite.Run(fmt.Sprintf("Case %s", tc.msg), func() {
-			suite.SetupTest()
+	suite.NotPanics(func() {
+		evidence.InitGenesis(suite.ctx, suite.keeper, evidence.NewGenesisState(types.DefaultParams(), testEvidence))
+	})
 
-			tc.malleate()
-
-			if tc.expPass {
-				suite.NotPanics(func() {
-					evidence.ExportGenesis(suite.ctx, suite.keeper)
-				})
-			} else {
-				suite.Panics(func() {
-					evidence.ExportGenesis(suite.ctx, suite.keeper)
-				})
-			}
-
-			tc.posttests()
-		})
+	for _, e := range testEvidence {
+		_, ok := suite.keeper.GetEvidence(suite.ctx, e.Hash())
+		suite.True(ok)
 	}
+}
+
+func (suite *GenesisTestSuite) TestInitGenesis_Invalid() {
+	pk := ed25519.GenPrivKey()
+
+	testEvidence := make([]exported.Evidence, 100)
+	for i := 0; i < 100; i++ {
+		sv := types.TestVote{
+			ValidatorAddress: pk.PubKey().Address(),
+			Height:           int64(i),
+			Round:            0,
+		}
+		sig, err := pk.Sign(sv.SignBytes("test-chain"))
+		suite.NoError(err)
+		sv.Signature = sig
+
+		testEvidence[i] = types.TestEquivocationEvidence{
+			Power:      100,
+			TotalPower: 100000,
+			PubKey:     pk.PubKey(),
+			VoteA:      sv,
+			VoteB:      types.TestVote{Height: 10, Round: 1},
+		}
+	}
+
+	suite.Panics(func() {
+		evidence.InitGenesis(suite.ctx, suite.keeper, evidence.NewGenesisState(types.DefaultParams(), testEvidence))
+	})
+
+	suite.Empty(suite.keeper.GetAllEvidence(suite.ctx))
 }
 
 func TestGenesisTestSuite(t *testing.T) {

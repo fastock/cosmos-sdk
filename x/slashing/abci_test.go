@@ -1,43 +1,39 @@
-package slashing_test
+package slashing
 
 import (
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
-	abci "github.com/tendermint/tendermint/abci/types"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 
-	"github.com/cosmos/cosmos-sdk/simapp"
+	abci "github.com/tendermint/tendermint/abci/types"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/cosmos/cosmos-sdk/x/slashing"
+	slashingkeeper "github.com/cosmos/cosmos-sdk/x/slashing/internal/keeper"
 	"github.com/cosmos/cosmos-sdk/x/staking"
-	"github.com/cosmos/cosmos-sdk/x/staking/teststaking"
-	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 )
 
 func TestBeginBlocker(t *testing.T) {
-	app := simapp.Setup(false)
-	ctx := app.BaseApp.NewContext(false, tmproto.Header{})
-
-	pks := simapp.CreateTestPubKeys(1)
-	simapp.AddTestAddrsFromPubKeys(app, ctx, pks, sdk.TokensFromConsensusPower(200))
-	addr, pk := sdk.ValAddress(pks[0].Address()), pks[0]
-	tstaking := teststaking.NewHelper(t, ctx, app.StakingKeeper)
+	ctx, ck, sk, _, keeper := slashingkeeper.CreateTestInput(t, DefaultParams())
+	power := int64(100)
+	amt := sdk.TokensFromConsensusPower(power)
+	addr, pk := slashingkeeper.Addrs[2], slashingkeeper.Pks[2]
 
 	// bond the validator
-	power := int64(100)
-	amt := tstaking.CreateValidatorWithValPower(addr, pk, power, true)
-	staking.EndBlocker(ctx, app.StakingKeeper)
+	res, err := staking.NewHandler(sk)(ctx, slashingkeeper.NewTestMsgCreateValidator(addr, pk, amt))
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	staking.EndBlocker(ctx, sk)
 	require.Equal(
-		t, app.BankKeeper.GetAllBalances(ctx, sdk.AccAddress(addr)),
-		sdk.NewCoins(sdk.NewCoin(app.StakingKeeper.GetParams(ctx).BondDenom, InitTokens.Sub(amt))),
+		t, ck.GetCoins(ctx, sdk.AccAddress(addr)),
+		sdk.NewCoins(sdk.NewCoin(sk.GetParams(ctx).BondDenom, slashingkeeper.InitTokens.Sub(amt))),
 	)
-	require.Equal(t, amt, app.StakingKeeper.Validator(ctx, addr).GetBondedTokens())
+	require.Equal(t, amt, sk.Validator(ctx, addr).GetBondedTokens())
 
 	val := abci.Validator{
 		Address: pk.Address(),
-		Power:   power,
+		Power:   amt.Int64(),
 	}
 
 	// mark the validator as having signed
@@ -49,10 +45,9 @@ func TestBeginBlocker(t *testing.T) {
 			}},
 		},
 	}
+	BeginBlocker(ctx, req, keeper)
 
-	slashing.BeginBlocker(ctx, req, app.SlashingKeeper)
-
-	info, found := app.SlashingKeeper.GetValidatorSigningInfo(ctx, sdk.ConsAddress(pk.Address()))
+	info, found := keeper.GetValidatorSigningInfo(ctx, sdk.ConsAddress(pk.Address()))
 	require.True(t, found)
 	require.Equal(t, ctx.BlockHeight(), info.StartHeight)
 	require.Equal(t, int64(1), info.IndexOffset)
@@ -62,7 +57,7 @@ func TestBeginBlocker(t *testing.T) {
 	height := int64(0)
 
 	// for 1000 blocks, mark the validator as having signed
-	for ; height < app.SlashingKeeper.SignedBlocksWindow(ctx); height++ {
+	for ; height < keeper.SignedBlocksWindow(ctx); height++ {
 		ctx = ctx.WithBlockHeight(height)
 		req = abci.RequestBeginBlock{
 			LastCommitInfo: abci.LastCommitInfo{
@@ -72,12 +67,11 @@ func TestBeginBlocker(t *testing.T) {
 				}},
 			},
 		}
-
-		slashing.BeginBlocker(ctx, req, app.SlashingKeeper)
+		BeginBlocker(ctx, req, keeper)
 	}
 
 	// for 500 blocks, mark the validator as having not signed
-	for ; height < ((app.SlashingKeeper.SignedBlocksWindow(ctx) * 2) - app.SlashingKeeper.MinSignedPerWindow(ctx) + 1); height++ {
+	for ; height < ((keeper.SignedBlocksWindow(ctx) * 2) - keeper.MinSignedPerWindow(ctx) + 1); height++ {
 		ctx = ctx.WithBlockHeight(height)
 		req = abci.RequestBeginBlock{
 			LastCommitInfo: abci.LastCommitInfo{
@@ -87,15 +81,14 @@ func TestBeginBlocker(t *testing.T) {
 				}},
 			},
 		}
-
-		slashing.BeginBlocker(ctx, req, app.SlashingKeeper)
+		BeginBlocker(ctx, req, keeper)
 	}
 
 	// end block
-	staking.EndBlocker(ctx, app.StakingKeeper)
+	staking.EndBlocker(ctx, sk)
 
 	// validator should be jailed
-	validator, found := app.StakingKeeper.GetValidatorByConsAddr(ctx, sdk.GetConsAddress(pk))
+	validator, found := sk.GetValidatorByConsAddr(ctx, sdk.GetConsAddress(pk))
 	require.True(t, found)
-	require.Equal(t, stakingtypes.Unbonding, validator.GetStatus())
+	require.Equal(t, sdk.Unbonding, validator.GetStatus())
 }

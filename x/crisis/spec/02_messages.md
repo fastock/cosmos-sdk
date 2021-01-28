@@ -11,7 +11,12 @@ corresponding updates to the state.
 
 Blockchain invariants can be checked using the `MsgVerifyInvariant` message. 
 
-+++ https://github.com/cosmos/cosmos-sdk/blob/v0.40.0-rc7/proto/cosmos/crisis/v1beta1/tx.proto#L14-L22
+```go
+type MsgVerifyInvariant struct {
+	Sender         sdk.AccAddress 
+	InvariantRoute string
+}
+```
 
 This message is expected to fail if: 
  - the sender does not have enough coins for the constant fee

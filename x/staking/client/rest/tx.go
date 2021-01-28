@@ -6,25 +6,25 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/cosmos/cosmos-sdk/client"
-	"github.com/cosmos/cosmos-sdk/client/tx"
+	"github.com/cosmos/cosmos-sdk/client/context"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/rest"
+	"github.com/cosmos/cosmos-sdk/x/auth/client/utils"
 	"github.com/cosmos/cosmos-sdk/x/staking/types"
 )
 
-func registerTxHandlers(clientCtx client.Context, r *mux.Router) {
+func registerTxRoutes(cliCtx context.CLIContext, r *mux.Router) {
 	r.HandleFunc(
 		"/staking/delegators/{delegatorAddr}/delegations",
-		newPostDelegationsHandlerFn(clientCtx),
+		postDelegationsHandlerFn(cliCtx),
 	).Methods("POST")
 	r.HandleFunc(
 		"/staking/delegators/{delegatorAddr}/unbonding_delegations",
-		newPostUnbondingDelegationsHandlerFn(clientCtx),
+		postUnbondingDelegationsHandlerFn(cliCtx),
 	).Methods("POST")
 	r.HandleFunc(
 		"/staking/delegators/{delegatorAddr}/redelegations",
-		newPostRedelegationsHandlerFn(clientCtx),
+		postRedelegationsHandlerFn(cliCtx),
 	).Methods("POST")
 }
 
@@ -55,10 +55,11 @@ type (
 	}
 )
 
-func newPostDelegationsHandlerFn(clientCtx client.Context) http.HandlerFunc {
+func postDelegationsHandlerFn(cliCtx context.CLIContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req DelegateRequest
-		if !rest.ReadRESTReq(w, r, clientCtx.LegacyAmino, &req) {
+
+		if !rest.ReadRESTReq(w, r, cliCtx.Codec, &req) {
 			return
 		}
 
@@ -68,12 +69,14 @@ func newPostDelegationsHandlerFn(clientCtx client.Context) http.HandlerFunc {
 		}
 
 		msg := types.NewMsgDelegate(req.DelegatorAddress, req.ValidatorAddress, req.Amount)
-		if rest.CheckBadRequestError(w, msg.ValidateBasic()) {
+		if err := msg.ValidateBasic(); err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		fromAddr, err := sdk.AccAddressFromBech32(req.BaseReq.From)
-		if rest.CheckBadRequestError(w, err) {
+		if err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -82,14 +85,15 @@ func newPostDelegationsHandlerFn(clientCtx client.Context) http.HandlerFunc {
 			return
 		}
 
-		tx.WriteGeneratedTxResponse(clientCtx, w, req.BaseReq, msg)
+		utils.WriteGenerateStdTxResponse(w, cliCtx, req.BaseReq, []sdk.Msg{msg})
 	}
 }
 
-func newPostRedelegationsHandlerFn(clientCtx client.Context) http.HandlerFunc {
+func postRedelegationsHandlerFn(cliCtx context.CLIContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req RedelegateRequest
-		if !rest.ReadRESTReq(w, r, clientCtx.LegacyAmino, &req) {
+
+		if !rest.ReadRESTReq(w, r, cliCtx.Codec, &req) {
 			return
 		}
 
@@ -99,12 +103,14 @@ func newPostRedelegationsHandlerFn(clientCtx client.Context) http.HandlerFunc {
 		}
 
 		msg := types.NewMsgBeginRedelegate(req.DelegatorAddress, req.ValidatorSrcAddress, req.ValidatorDstAddress, req.Amount)
-		if rest.CheckBadRequestError(w, msg.ValidateBasic()) {
+		if err := msg.ValidateBasic(); err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		fromAddr, err := sdk.AccAddressFromBech32(req.BaseReq.From)
-		if rest.CheckBadRequestError(w, err) {
+		if err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -113,14 +119,15 @@ func newPostRedelegationsHandlerFn(clientCtx client.Context) http.HandlerFunc {
 			return
 		}
 
-		tx.WriteGeneratedTxResponse(clientCtx, w, req.BaseReq, msg)
+		utils.WriteGenerateStdTxResponse(w, cliCtx, req.BaseReq, []sdk.Msg{msg})
 	}
 }
 
-func newPostUnbondingDelegationsHandlerFn(clientCtx client.Context) http.HandlerFunc {
+func postUnbondingDelegationsHandlerFn(cliCtx context.CLIContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req UndelegateRequest
-		if !rest.ReadRESTReq(w, r, clientCtx.LegacyAmino, &req) {
+
+		if !rest.ReadRESTReq(w, r, cliCtx.Codec, &req) {
 			return
 		}
 
@@ -130,12 +137,14 @@ func newPostUnbondingDelegationsHandlerFn(clientCtx client.Context) http.Handler
 		}
 
 		msg := types.NewMsgUndelegate(req.DelegatorAddress, req.ValidatorAddress, req.Amount)
-		if rest.CheckBadRequestError(w, msg.ValidateBasic()) {
+		if err := msg.ValidateBasic(); err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		fromAddr, err := sdk.AccAddressFromBech32(req.BaseReq.From)
-		if rest.CheckBadRequestError(w, err) {
+		if err != nil {
+			rest.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -144,6 +153,6 @@ func newPostUnbondingDelegationsHandlerFn(clientCtx client.Context) http.Handler
 			return
 		}
 
-		tx.WriteGeneratedTxResponse(clientCtx, w, req.BaseReq, msg)
+		utils.WriteGenerateStdTxResponse(w, cliCtx, req.BaseReq, []sdk.Msg{msg})
 	}
 }

@@ -1,11 +1,26 @@
 package types
 
 import (
+	"fmt"
 	"time"
 
-	yaml "gopkg.in/yaml.v2"
-
 	sdk "github.com/cosmos/cosmos-sdk/types"
+)
+
+type (
+	// Commission defines a commission parameters for a given validator.
+	Commission struct {
+		CommissionRates `json:"commission_rates" yaml:"commission_rates"`
+		UpdateTime      time.Time `json:"update_time" yaml:"update_time"` // the last time the commission rate was changed
+	}
+
+	// CommissionRates defines the initial commission rates to be used for creating a
+	// validator.
+	CommissionRates struct {
+		Rate          sdk.Dec `json:"rate" yaml:"rate"`                       // the commission rate charged to delegators, as a fraction
+		MaxRate       sdk.Dec `json:"max_rate" yaml:"max_rate"`               // maximum commission rate which validator can ever charge, as a fraction
+		MaxChangeRate sdk.Dec `json:"max_change_rate" yaml:"max_change_rate"` // maximum daily increase of the validator commission, as a fraction
+	}
 )
 
 // NewCommissionRates returns an initialized validator commission rates.
@@ -34,43 +49,47 @@ func NewCommissionWithTime(rate, maxRate, maxChangeRate sdk.Dec, updatedAt time.
 	}
 }
 
-// String implements the Stringer interface for a Commission object.
-func (c Commission) String() string {
-	out, _ := yaml.Marshal(c)
-	return string(out)
+// Equal checks if the given Commission object is equal to the receiving
+// Commission object.
+func (c Commission) Equal(c2 Commission) bool {
+	return c.Rate.Equal(c2.Rate) &&
+		c.MaxRate.Equal(c2.MaxRate) &&
+		c.MaxChangeRate.Equal(c2.MaxChangeRate) &&
+		c.UpdateTime.Equal(c2.UpdateTime)
 }
 
-// String implements the Stringer interface for a CommissionRates object.
-func (cr CommissionRates) String() string {
-	out, _ := yaml.Marshal(cr)
-	return string(out)
+// String implements the Stringer interface for a Commission.
+func (c Commission) String() string {
+	return fmt.Sprintf("rate: %s, maxRate: %s, maxChangeRate: %s, updateTime: %s",
+		c.Rate, c.MaxRate, c.MaxChangeRate, c.UpdateTime,
+	)
 }
 
 // Validate performs basic sanity validation checks of initial commission
 // parameters. If validation fails, an SDK error is returned.
-func (cr CommissionRates) Validate() error {
+func (c CommissionRates) Validate() error {
 	switch {
-	case cr.MaxRate.IsNegative():
+	case c.MaxRate.IsNegative():
 		// max rate cannot be negative
 		return ErrCommissionNegative
 
-	case cr.MaxRate.GT(sdk.OneDec()):
+	case c.MaxRate.GT(sdk.OneDec()):
 		// max rate cannot be greater than 1
 		return ErrCommissionHuge
 
-	case cr.Rate.IsNegative():
+	case c.Rate.IsNegative():
 		// rate cannot be negative
 		return ErrCommissionNegative
 
-	case cr.Rate.GT(cr.MaxRate):
+	case c.Rate.GT(c.MaxRate):
 		// rate cannot be greater than the max rate
 		return ErrCommissionGTMaxRate
 
-	case cr.MaxChangeRate.IsNegative():
+	case c.MaxChangeRate.IsNegative():
 		// change rate cannot be negative
 		return ErrCommissionChangeRateNegative
 
-	case cr.MaxChangeRate.GT(cr.MaxRate):
+	case c.MaxChangeRate.GT(c.MaxRate):
 		// change rate cannot be greater than the max rate
 		return ErrCommissionChangeRateGTMaxRate
 	}

@@ -1,35 +1,34 @@
 package keys
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/cosmos/cosmos-sdk/tests"
 
-	"github.com/cosmos/cosmos-sdk/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_RunMnemonicCmdNormal(t *testing.T) {
-	cmd := MnemonicKeyCommand()
-	_ = testutil.ApplyMockIODiscardOutErr(cmd)
-	cmd.SetArgs([]string{})
-	require.NoError(t, cmd.Execute())
+	cmdBasic := MnemonicKeyCommand()
+	err := runMnemonicCmd(cmdBasic, []string{})
+	require.NoError(t, err)
 }
 
 func Test_RunMnemonicCmdUser(t *testing.T) {
-	cmd := MnemonicKeyCommand()
-	_ = testutil.ApplyMockIODiscardOutErr(cmd)
+	cmdUser := MnemonicKeyCommand()
+	err := cmdUser.Flags().Set(flagUserEntropy, "1")
+	assert.NoError(t, err)
 
-	cmd.SetArgs([]string{fmt.Sprintf("--%s=1", flagUserEntropy)})
-	err := cmd.Execute()
+	err = runMnemonicCmd(cmdUser, []string{})
 	require.Error(t, err)
 	require.Equal(t, "EOF", err.Error())
 
 	// Try again
-	mockIn := testutil.ApplyMockIODiscardOutErr(cmd)
+	mockIn, _, _ := tests.ApplyMockIO(cmdUser)
 	mockIn.Reset("Hi!\n")
-	err = cmd.Execute()
+	err = runMnemonicCmd(cmdUser, []string{})
 	require.Error(t, err)
 	require.Equal(t,
 		"256-bits is 43 characters in Base-64, and 100 in Base-6. You entered 3, and probably want more",
@@ -38,15 +37,18 @@ func Test_RunMnemonicCmdUser(t *testing.T) {
 	// Now provide "good" entropy :)
 	fakeEntropy := strings.Repeat(":)", 40) + "\ny\n" // entropy + accept count
 	mockIn.Reset(fakeEntropy)
-	require.NoError(t, cmd.Execute())
+	err = runMnemonicCmd(cmdUser, []string{})
+	require.NoError(t, err)
 
 	// Now provide "good" entropy but no answer
 	fakeEntropy = strings.Repeat(":)", 40) + "\n" // entropy + accept count
 	mockIn.Reset(fakeEntropy)
-	require.Error(t, cmd.Execute())
+	err = runMnemonicCmd(cmdUser, []string{})
+	require.Error(t, err)
 
 	// Now provide "good" entropy but say no
 	fakeEntropy = strings.Repeat(":)", 40) + "\nn\n" // entropy + accept count
 	mockIn.Reset(fakeEntropy)
-	require.NoError(t, cmd.Execute())
+	err = runMnemonicCmd(cmdUser, []string{})
+	require.NoError(t, err)
 }

@@ -3,8 +3,6 @@ package simulation
 import (
 	"fmt"
 	"math/rand"
-
-	"github.com/cosmos/cosmos-sdk/types/simulation"
 )
 
 // TransitionMatrix is _almost_ a left stochastic matrix.  It is technically
@@ -21,7 +19,7 @@ type TransitionMatrix struct {
 
 // CreateTransitionMatrix creates a transition matrix from the provided weights.
 // TODO: Provide example usage
-func CreateTransitionMatrix(weights [][]int) (simulation.TransitionMatrix, error) {
+func CreateTransitionMatrix(weights [][]int) (TransitionMatrix, error) {
 	n := len(weights)
 	for i := 0; i < n; i++ {
 		if len(weights[i]) != n {
@@ -29,15 +27,12 @@ func CreateTransitionMatrix(weights [][]int) (simulation.TransitionMatrix, error
 				fmt.Errorf("transition matrix: non-square matrix provided, error on row %d", i)
 		}
 	}
-
 	totals := make([]int, n)
-
 	for row := 0; row < n; row++ {
 		for col := 0; col < n; col++ {
 			totals[col] += weights[row][col]
 		}
 	}
-
 	return TransitionMatrix{weights, totals, n}, nil
 }
 
@@ -49,7 +44,6 @@ func (t TransitionMatrix) NextState(r *rand.Rand, i int) int {
 		if randNum < t.weights[row][i] {
 			return row
 		}
-
 		randNum -= t.weights[row][i]
 	}
 	// This line should never get executed
@@ -61,18 +55,14 @@ func (t TransitionMatrix) NextState(r *rand.Rand, i int) int {
 func GetMemberOfInitialState(r *rand.Rand, weights []int) int {
 	n := len(weights)
 	total := 0
-
 	for i := 0; i < n; i++ {
 		total += weights[i]
 	}
-
 	randNum := r.Intn(total)
-
 	for state := 0; state < n; state++ {
 		if randNum < weights[state] {
 			return state
 		}
-
 		randNum -= weights[state]
 	}
 	// This line should never get executed

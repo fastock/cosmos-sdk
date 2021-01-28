@@ -5,48 +5,37 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	tmkv "github.com/tendermint/tendermint/libs/kv"
 
 	"github.com/cosmos/cosmos-sdk/codec"
-	"github.com/cosmos/cosmos-sdk/std"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/cosmos/cosmos-sdk/types/kv"
-	"github.com/cosmos/cosmos-sdk/types/module"
-	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	"github.com/cosmos/cosmos-sdk/x/auth"
 )
 
-func makeCodec(bm module.BasicManager) *codec.LegacyAmino {
-	cdc := codec.NewLegacyAmino()
-
-	bm.RegisterLegacyAminoCodec(cdc)
-	std.RegisterLegacyAminoCodec(cdc)
-
-	return cdc
-}
-
 func TestGetSimulationLog(t *testing.T) {
-	cdc := makeCodec(ModuleBasics)
+	cdc := MakeCodec()
 
 	decoders := make(sdk.StoreDecoderRegistry)
-	decoders[authtypes.StoreKey] = func(kvAs, kvBs kv.Pair) string { return "10" }
+	decoders[auth.StoreKey] = func(cdc *codec.Codec, kvAs, kvBs tmkv.Pair) string { return "10" }
 
 	tests := []struct {
 		store       string
-		kvPairs     []kv.Pair
+		kvPairs     []tmkv.Pair
 		expectedLog string
 	}{
 		{
 			"Empty",
-			[]kv.Pair{{}},
+			[]tmkv.Pair{{}},
 			"",
 		},
 		{
-			authtypes.StoreKey,
-			[]kv.Pair{{Key: authtypes.GlobalAccountNumberKey, Value: cdc.MustMarshalBinaryBare(uint64(10))}},
+			auth.StoreKey,
+			[]tmkv.Pair{{Key: auth.GlobalAccountNumberKey, Value: cdc.MustMarshalBinaryLengthPrefixed(uint64(10))}},
 			"10",
 		},
 		{
 			"OtherStore",
-			[]kv.Pair{{Key: []byte("key"), Value: []byte("value")}},
+			[]tmkv.Pair{{Key: []byte("key"), Value: []byte("value")}},
 			fmt.Sprintf("store A %X => %X\nstore B %X => %X\n", []byte("key"), []byte("value"), []byte("key"), []byte("value")),
 		},
 	}
@@ -54,7 +43,7 @@ func TestGetSimulationLog(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.store, func(t *testing.T) {
-			require.Equal(t, tt.expectedLog, GetSimulationLog(tt.store, decoders, tt.kvPairs, tt.kvPairs), tt.store)
+			require.Equal(t, tt.expectedLog, GetSimulationLog(tt.store, decoders, cdc, tt.kvPairs, tt.kvPairs), tt.store)
 		})
 	}
 }

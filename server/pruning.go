@@ -4,28 +4,26 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/spf13/cast"
+	"github.com/spf13/viper"
 
-	"github.com/cosmos/cosmos-sdk/server/types"
 	"github.com/cosmos/cosmos-sdk/store"
-	storetypes "github.com/cosmos/cosmos-sdk/store/types"
+	"github.com/cosmos/cosmos-sdk/store/types"
 )
 
 // GetPruningOptionsFromFlags parses command flags and returns the correct
 // PruningOptions. If a pruning strategy is provided, that will be parsed and
 // returned, otherwise, it is assumed custom pruning options are provided.
-func GetPruningOptionsFromFlags(appOpts types.AppOptions) (storetypes.PruningOptions, error) {
-	strategy := strings.ToLower(cast.ToString(appOpts.Get(FlagPruning)))
+func GetPruningOptionsFromFlags() (types.PruningOptions, error) {
+	strategy := strings.ToLower(viper.GetString(FlagPruning))
 
 	switch strategy {
-	case storetypes.PruningOptionDefault, storetypes.PruningOptionNothing, storetypes.PruningOptionEverything:
-		return storetypes.NewPruningOptionsFromString(strategy), nil
+	case types.PruningOptionDefault, types.PruningOptionNothing, types.PruningOptionEverything:
+		return types.NewPruningOptionsFromString(strategy), nil
 
-	case storetypes.PruningOptionCustom:
-		opts := storetypes.NewPruningOptions(
-			cast.ToUint64(appOpts.Get(FlagPruningKeepRecent)),
-			cast.ToUint64(appOpts.Get(FlagPruningKeepEvery)),
-			cast.ToUint64(appOpts.Get(FlagPruningInterval)),
+	case types.PruningOptionCustom:
+		opts := types.NewPruningOptions(
+			viper.GetUint64(FlagPruningKeepRecent),
+			viper.GetUint64(FlagPruningKeepEvery), viper.GetUint64(FlagPruningInterval),
 		)
 
 		if err := opts.Validate(); err != nil {

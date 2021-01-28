@@ -37,16 +37,6 @@ module.exports = {
       key: "ac317234e6a42074175369b2f42e9754",
       index: "cosmos-sdk"
     },
-    versions: [
-      {
-        "label": "v0.39",
-        "key": "v0.39"
-      },
-      {
-        "label": "master",
-        "key": "master"
-      }
-    ],
     topbar: {
       banner: true
     },
@@ -196,7 +186,7 @@ module.exports = {
     [
       "@vuepress/google-analytics",
       {
-        ga: "UA-51029217-2"
+        ga: "UA-51029217-12"
       }
     ],
     [

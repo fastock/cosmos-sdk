@@ -3,38 +3,37 @@ package keeper
 import (
 	"fmt"
 
-	"github.com/tendermint/tendermint/libs/log"
-
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	"github.com/cosmos/cosmos-sdk/x/distribution/types"
-	paramtypes "github.com/cosmos/cosmos-sdk/x/params/types"
+	"github.com/cosmos/cosmos-sdk/x/params"
+
+	"github.com/tendermint/tendermint/libs/log"
 )
 
 // Keeper of the distribution store
 type Keeper struct {
 	storeKey      sdk.StoreKey
-	cdc           codec.BinaryMarshaler
-	paramSpace    paramtypes.Subspace
-	authKeeper    types.AccountKeeper
-	bankKeeper    types.BankKeeper
+	cdc           *codec.Codec
+	paramSpace    params.Subspace
 	stakingKeeper types.StakingKeeper
+	supplyKeeper  types.SupplyKeeper
 
-	blockedAddrs map[string]bool
+	blacklistedAddrs map[string]bool
 
 	feeCollectorName string // name of the FeeCollector ModuleAccount
 }
 
 // NewKeeper creates a new distribution Keeper instance
 func NewKeeper(
-	cdc codec.BinaryMarshaler, key sdk.StoreKey, paramSpace paramtypes.Subspace,
-	ak types.AccountKeeper, bk types.BankKeeper, sk types.StakingKeeper,
-	feeCollectorName string, blockedAddrs map[string]bool,
+	cdc *codec.Codec, key sdk.StoreKey, paramSpace params.Subspace,
+	sk types.StakingKeeper, supplyKeeper types.SupplyKeeper, feeCollectorName string,
+	blacklistedAddrs map[string]bool,
 ) Keeper {
 
 	// ensure distribution module account is set
-	if addr := ak.GetModuleAddress(types.ModuleName); addr == nil {
+	if addr := supplyKeeper.GetModuleAddress(types.ModuleName); addr == nil {
 		panic(fmt.Sprintf("%s module account has not been set", types.ModuleName))
 	}
 
@@ -47,23 +46,22 @@ func NewKeeper(
 		storeKey:         key,
 		cdc:              cdc,
 		paramSpace:       paramSpace,
-		authKeeper:       ak,
-		bankKeeper:       bk,
 		stakingKeeper:    sk,
+		supplyKeeper:     supplyKeeper,
 		feeCollectorName: feeCollectorName,
-		blockedAddrs:     blockedAddrs,
+		blacklistedAddrs: blacklistedAddrs,
 	}
 }
 
 // Logger returns a module-specific logger.
 func (k Keeper) Logger(ctx sdk.Context) log.Logger {
-	return ctx.Logger().With("module", "x/"+types.ModuleName)
+	return ctx.Logger().With("module", fmt.Sprintf("x/%s", types.ModuleName))
 }
 
 // SetWithdrawAddr sets a new address that will receive the rewards upon withdrawal
 func (k Keeper) SetWithdrawAddr(ctx sdk.Context, delegatorAddr sdk.AccAddress, withdrawAddr sdk.AccAddress) error {
-	if k.blockedAddrs[withdrawAddr.String()] {
-		return sdkerrors.Wrapf(sdkerrors.ErrUnauthorized, "%s is not allowed to receive external funds", withdrawAddr)
+	if k.blacklistedAddrs[withdrawAddr.String()] {
+		return sdkerrors.Wrapf(sdkerrors.ErrUnauthorized, "%s is blacklisted from receiving external funds", withdrawAddr)
 	}
 
 	if !k.GetWithdrawAddrEnabled(ctx) {
@@ -116,21 +114,21 @@ func (k Keeper) WithdrawDelegationRewards(ctx sdk.Context, delAddr sdk.AccAddres
 func (k Keeper) WithdrawValidatorCommission(ctx sdk.Context, valAddr sdk.ValAddress) (sdk.Coins, error) {
 	// fetch validator accumulated commission
 	accumCommission := k.GetValidatorAccumulatedCommission(ctx, valAddr)
-	if accumCommission.Commission.IsZero() {
+	if accumCommission.IsZero() {
 		return nil, types.ErrNoValidatorCommission
 	}
 
-	commission, remainder := accumCommission.Commission.TruncateDecimal()
-	k.SetValidatorAccumulatedCommission(ctx, valAddr, types.ValidatorAccumulatedCommission{Commission: remainder}) // leave remainder to withdraw later
+	commission, remainder := accumCommission.TruncateDecimal()
+	k.SetValidatorAccumulatedCommission(ctx, valAddr, remainder) // leave remainder to withdraw later
 
 	// update outstanding
-	outstanding := k.GetValidatorOutstandingRewards(ctx, valAddr).Rewards
-	k.SetValidatorOutstandingRewards(ctx, valAddr, types.ValidatorOutstandingRewards{Rewards: outstanding.Sub(sdk.NewDecCoinsFromCoins(commission...))})
+	outstanding := k.GetValidatorOutstandingRewards(ctx, valAddr)
+	k.SetValidatorOutstandingRewards(ctx, valAddr, outstanding.Sub(sdk.NewDecCoinsFromCoins(commission...)))
 
 	if !commission.IsZero() {
 		accAddr := sdk.AccAddress(valAddr)
 		withdrawAddr := k.GetDelegatorWithdrawAddr(ctx, accAddr)
-		err := k.bankKeeper.SendCoinsFromModuleToAccount(ctx, types.ModuleName, withdrawAddr, commission)
+		err := k.supplyKeeper.SendCoinsFromModuleToAccount(ctx, types.ModuleName, withdrawAddr, commission)
 		if err != nil {
 			return nil, err
 		}
@@ -150,7 +148,7 @@ func (k Keeper) WithdrawValidatorCommission(ctx sdk.Context, valAddr sdk.ValAddr
 func (k Keeper) GetTotalRewards(ctx sdk.Context) (totalRewards sdk.DecCoins) {
 	k.IterateValidatorOutstandingRewards(ctx,
 		func(_ sdk.ValAddress, rewards types.ValidatorOutstandingRewards) (stop bool) {
-			totalRewards = totalRewards.Add(rewards.Rewards...)
+			totalRewards = totalRewards.Add(rewards...)
 			return false
 		},
 	)
@@ -163,7 +161,7 @@ func (k Keeper) GetTotalRewards(ctx sdk.Context) (totalRewards sdk.DecCoins) {
 // added to the pool. An error is returned if the amount cannot be sent to the
 // module account.
 func (k Keeper) FundCommunityPool(ctx sdk.Context, amount sdk.Coins, sender sdk.AccAddress) error {
-	if err := k.bankKeeper.SendCoinsFromAccountToModule(ctx, sender, types.ModuleName, amount); err != nil {
+	if err := k.supplyKeeper.SendCoinsFromAccountToModule(ctx, sender, types.ModuleName, amount); err != nil {
 		return err
 	}
 
